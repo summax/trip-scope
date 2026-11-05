@@ -1,2 +1,60 @@
-# trip-scope
-An offline-first family travel planner for budgeting, expense analysis, and comparing travel options.
+# TripScope
+
+一个文件,完整的一次旅行。
+
+TripScope 是面向家庭出游的费用计划工具:整个应用 + 一次旅行的全部数据装在**一个 HTML 文件**里,双击即用、离线运行、无需安装、无需账号,通过**文件传递**分享与协作。
+
+```
+TripScope/
+├─ TripScope.html          # 空白工具:双击打开,新建旅行
+├─ 2027国庆云南旅行.html     # 一次旅行 = 一个自包含文件(应用 + 数据)
+└─ ...
+```
+
+## 快速使用
+
+| 动作 | 操作 |
+|---|---|
+| 新建旅行 | 双击 `TripScope.html` → 新建旅行 → 编辑 → 「保存」下载副本(即旅行文件) |
+| 继续编辑 | 双击旅行文件打开;或用「打开文件」选择它(句柄模式,支持写回) |
+| 分享给家人 | 直接把旅行 HTML 文件发过去(微信/邮件/U盘),对方双击即可查看并编辑 |
+| 备份/迁移 | 「导出 JSON」/「导入」;新版工具可导入旧旅行文件并自动迁移数据 |
+
+## 保存路径说明
+
+- **句柄模式**(文件经应用内「打开文件」选择器打开):「保存到文件」写回原文件。写回前重读磁盘做**尽力检测**外部修改,发现冲突由用户选择,不静默覆盖。
+- **双击模式**(双击 HTML 直接打开):「保存」= 下载更新后的副本,同一旅行延续(保持旅行 ID)。
+- 副本由**启动时捕获的 DOM 快照**生成,使用前经过自校验(唯一数据节点 / 主应用脚本标记 / 资源内联);校验不通过时禁用副本路径,引导 JSON 导出。
+- 无论哪条路径,编辑内容始终有 localStorage 草稿兜底;草稿按旅行 UUID 分键,较新时由用户选择恢复,不静默覆盖。
+
+## 开发
+
+```bash
+npm install
+npm run dev        # 开发服务器
+npm run build      # 类型检查 + 单文件构建 → dist/trip-scope.html
+npm run example    # 从产物生成 examples/示例旅行.html
+```
+
+产物为单文件 HTML(<600KB):JS/CSS/图标全部内联,file:// 直接打开,无外链、无 fetch、无 Service Worker。
+
+技术栈:Vite + TypeScript + Vue 3 + Tailwind CSS + vite-plugin-singlefile + lucide 图标。不引 Pinia / 组件库 / 图表库 / 中文 webfont。
+
+## 数据安全设计
+
+- 数据内嵌 `<script id="app-data" type="application/json">` 节点;序列化时 `<` 全部转义为 `\u003c`,防 `</script>` 逃逸
+- 节点替换严格边界唯一命中(0 或 >1 一律拒绝写入)
+- `schemaVersion` 版本裁决:未知更高版本 → 只读(仅可导出 JSON);更低版本 → 迁移函数链;损坏 → 安全模式 + 本地草稿扫描恢复
+- localStorage 写入全程 try/catch,失败提示改用文件保存 / JSON 导出
+
+## 浏览器兼容
+
+| 能力 | Chrome/Edge 桌面 | Firefox / Safari | 移动端浏览器 |
+|---|---|---|---|
+| 打开编辑、草稿、JSON 导入导出、下载副本 | ✅ | ✅ | ✅ |
+| 「打开文件」句柄 + 写回原文件 | ✅(Chromium) | ❌(降级下载副本) | ❌(降级下载副本) |
+| 「另存为」选择器 | ✅ | ❌(降级下载副本) | ❌ |
+
+## 当前阶段
+
+技术骨架已完成并通过 file:// 端到端验收(37 项断言)。旅行日期、交通/住宿选项、多方案对比、费用汇总等业务功能将在后续阶段实现;移动端存档定位另行讨论。

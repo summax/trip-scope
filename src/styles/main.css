@@ -1,0 +1,74 @@
+@import "tailwindcss";
+
+/* 主题 token:浅色为默认,暗色通过 html[data-theme="dark"] 覆盖 CSS 变量实现 */
+@theme inline {
+  --color-bg: var(--ts-bg);
+  --color-surface: var(--ts-surface);
+  --color-surface-2: var(--ts-surface-2);
+  --color-line: var(--ts-line);
+  --color-ink: var(--ts-ink);
+  --color-muted: var(--ts-muted);
+  --color-brand: var(--ts-brand);
+  --color-brand-strong: var(--ts-brand-strong);
+  --color-danger: var(--ts-danger);
+  --color-warn: var(--ts-warn);
+  --color-info: var(--ts-info);
+}
+
+:root {
+  --ts-bg: #f4f6f8;
+  --ts-surface: #ffffff;
+  --ts-surface-2: #eef1f5;
+  --ts-line: #dfe3ea;
+  --ts-ink: #1e2530;
+  --ts-muted: #64748b;
+  --ts-brand: #0f9d8f;
+  --ts-brand-strong: #0b7c72;
+  --ts-danger: #dc2626;
+  --ts-warn: #b45309;
+  --ts-info: #1d4ed8;
+}
+
+html[data-theme='dark'] {
+  --ts-bg: #0b1220;
+  --ts-surface: #121a2b;
+  --ts-surface-2: #1a2438;
+  --ts-line: #26324d;
+  --ts-ink: #e3e9f4;
+  --ts-muted: #8fa0bd;
+  --ts-brand: #2bb8a6;
+  --ts-brand-strong: #249e8f;
+  --ts-danger: #f87171;
+  --ts-warn: #fbbf24;
+  --ts-info: #93c5fd;
+}
+
+body {
+  margin: 0;
+  background: var(--ts-bg);
+  color: var(--ts-ink);
+  font-family:
+    'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
+    system-ui, -apple-system, sans-serif;
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center gap-1.5 rounded-lg border border-line bg-surface px-3 py-1.5 text-sm font-medium text-ink transition-colors hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply border-transparent bg-brand text-white hover:bg-brand-strong;
+  }
+  .card {
+    @apply rounded-xl border border-line bg-surface p-4 shadow-sm;
+  }
+  .input {
+    @apply w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-brand/40 disabled:cursor-not-allowed disabled:opacity-60;
+  }
+  .badge {
+    @apply inline-flex items-center rounded-full border border-line bg-surface-2 px-2.5 py-0.5 text-xs text-muted;
+  }
+  .btn-ghost-danger {
+    @apply inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-danger hover:bg-danger/10;
+  }
+}
