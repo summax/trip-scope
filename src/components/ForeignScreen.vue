@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { state } from '../core/store'
-import { newTrip } from '../core/store'
+import { state, newTrip } from '../core/store'
 </script>
 
 <template>

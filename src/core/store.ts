@@ -294,6 +294,7 @@ export async function save(): Promise<void> {
   // 双击模式:保存 = 下载副本,同一旅行延续(保持 id;空白工具首次保存固化真实 UUID)
   if (node.project.id === BLANK_TOOL_ID) {
     node.project.id = newId()
+    deleteDraft(BLANK_TOOL_ID)
   }
   const d = downloadTripCopy(node)
   if (d.ok) {
@@ -438,6 +439,16 @@ function setToast(msg: string): void {
   toastTimer = setTimeout(() => {
     state.toast = null
   }, 4000)
+}
+
+/** 兜底反馈通道:生产版 Vue 会静默吞掉异步事件处理器中的异常,由 main.ts 的 errorHandler 调用 */
+export function surfaceError(err: unknown): void {
+  const msg = err instanceof Error ? err.message : String(err)
+  state.toast = '操作失败:' + msg + '(请重试,或使用「导出 JSON」保全数据)'
+  if (toastTimer) clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => {
+    state.toast = null
+  }, 6000)
 }
 
 export function initRuntimeFlags(): void {

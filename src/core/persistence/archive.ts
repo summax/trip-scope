@@ -146,11 +146,6 @@ export function adoptHandle(html: string, handle: unknown): void {
   session.originalRaw = html
 }
 
-export function adoptRaw(html: string): void {
-  session.originalRaw = html
-  session.handle = null
-}
-
 export function clearSessionFile(): void {
   session.handle = null
   session.originalRaw = null

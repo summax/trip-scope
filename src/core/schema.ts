@@ -226,5 +226,6 @@ export function sanitizeFileName(name: string): string {
 }
 
 export function deepClone<T>(v: T): T {
-  return structuredClone(v)
+  // JSON 往返克隆:数据契约是纯 JSON;structuredClone 无法克隆 Vue reactive 代理(会抛 DataCloneError)
+  return JSON.parse(JSON.stringify(v))
 }
