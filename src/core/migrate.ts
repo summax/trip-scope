@@ -26,14 +26,29 @@ export function migrateV1toV2(node: TripNode): TripNode {
   >
   const data: Record<string, unknown> = { ...srcData }
 
-  // demo 归档:v1 演示数据原样移入 legacy.demo;已有 legacy 时合并且不覆盖其字段
+  // demo 归档:迁移永不覆盖、永不丢弃 legacy 既有内容。
+  // legacy.demo 已存在(与待归档 demo 同键冲突)或 legacy 非普通对象时,
+  // 拒绝迁移(抛错 → runMigrations 失败 → 只读模式),绝不静默取舍;
+  // legacy 为 null 视同不存在(v1 契约本无 legacy 字段)。
   const demo = data.demo
   if (demo !== undefined) {
     const legacy = data.legacy
-    const legacyObj = legacy && typeof legacy === 'object' && !Array.isArray(legacy)
-      ? (legacy as Record<string, unknown>)
-      : {}
-    data.legacy = { ...legacyObj, demo }
+    if (legacy !== undefined && legacy !== null) {
+      const isPlainObject = typeof legacy === 'object' && !Array.isArray(legacy)
+      if (!isPlainObject) {
+        throw new Error(
+          `legacy 为非对象值(${Array.isArray(legacy) ? '数组' : typeof legacy}),归档将丢失原值,已拒绝迁移`,
+        )
+      }
+      if ('demo' in (legacy as Record<string, unknown>)) {
+        throw new Error(
+          'legacy.demo 与待归档的 demo 同键冲突,拒绝静默覆盖;请人工合并后重试',
+        )
+      }
+      data.legacy = { ...(legacy as Record<string, unknown>), demo }
+    } else {
+      data.legacy = { demo }
+    }
     delete data.demo
   }
 

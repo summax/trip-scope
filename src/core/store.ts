@@ -405,11 +405,15 @@ export async function save(): Promise<void> {
       state.upgradeConfirmOpen = true
       return
     }
-    // 落盘痕迹必须准:appVersion/rev 只在真写盘时 stamp,弹确认层不产生写盘痕迹
-    stampNodeForWrite(node)
+    // 落盘痕迹必须准:对快照 stamp 后写盘,只有真落盘才把痕迹采纳回工作节点;
+    // 失败/冲突/取消不得让内存 rev 虚增(磁盘未写、内存已进位 = 谎报)
+    const snapshot = deepClone(node)
+    stampNodeForWrite(snapshot)
     // 升级写回:迁移后的旧文件以当前应用完整快照为底整体替换,不允许「新数据+旧代码」组合落盘
-    const r = await saveToHandle(node, { fullAppUpgrade: state.upgradeFromVersion !== null })
+    const r = await saveToHandle(snapshot, { fullAppUpgrade: state.upgradeFromVersion !== null })
     if (r.outcome === 'saved') {
+      node.appVersion = snapshot.appVersion
+      node.rev = snapshot.rev
       state.fileUpdatedAt = node.updatedAt
       state.upgradeFromVersion = null
       setToast('已保存到文件')
@@ -420,9 +424,11 @@ export async function save(): Promise<void> {
       return
     }
     if (r.outcome === 'downgraded') {
-      // 升级场景的降级副本同样必须携带当前应用代码(preferSnapshot)
-      const d = downloadTripCopy(node, state.upgradeFromVersion !== null)
+      // 升级场景的降级副本同样必须携带当前应用代码(preferSnapshot);副本已真实落盘,痕迹采纳回节点
+      const d = downloadTripCopy(snapshot, state.upgradeFromVersion !== null)
       if (d.ok) {
+        node.appVersion = snapshot.appVersion
+        node.rev = snapshot.rev
         setToast('未能写回原文件(' + (r.detail ?? '') + '),已改为下载副本「' + d.fileName + '」')
       } else {
         setToast('未能写回原文件(' + (r.detail ?? '') + '),副本生成失败:' + d.reason + ';请使用「导出 JSON」')
@@ -440,8 +446,12 @@ export async function save(): Promise<void> {
     if (pendingDraft && pendingDraft.node.project.id === BLANK_TOOL_ID) pendingDraft = null
     deleteDraft(BLANK_TOOL_ID)
   }
-  const d = downloadTripCopy(node)
+  const snapshot = deepClone(node)
+  stampNodeForWrite(snapshot)
+  const d = downloadTripCopy(snapshot)
   if (d.ok) {
+    node.appVersion = snapshot.appVersion
+    node.rev = snapshot.rev
     state.fileUpdatedAt = node.updatedAt
     setToast('已下载副本「' + d.fileName + '」,请从下载位置打开该文件继续编辑')
   } else {

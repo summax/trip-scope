@@ -16,6 +16,7 @@ export type AmountReason =
   | 'decimals'
   | 'no-integer-part'
   | 'trailing-point'
+  | 'bad-grouping'
   | 'overflow'
 
 export const AMOUNT_REASON_TEXT: Record<AmountReason, string> = {
@@ -26,6 +27,7 @@ export const AMOUNT_REASON_TEXT: Record<AmountReason, string> = {
   decimals: '金额最多两位小数(以分存储)',
   'no-integer-part': '小数点前必须有整数部分',
   'trailing-point': '小数点后必须有数字',
+  'bad-grouping': '分隔符格式:千分位须同一字符且三位一组(如 1,280)',
   overflow: '金额超出上限(1 万亿元)',
 }
 
@@ -43,22 +45,33 @@ export function parseAmount(input: string): ParseAmountResult {
   if (s === '') return { ok: false, reason: 'empty' }
   if (s.startsWith('-')) return { ok: false, reason: 'negative' }
   if (s.startsWith('+')) return { ok: false, reason: 'sign' }
-  // 千分位逗号/空白/下划线一律视作分隔符
-  s = s.replace(/[\s,_]/g, '')
-  if (s === '') return { ok: false, reason: 'empty' }
-  if (!/^[0-9.]+$/.test(s)) return { ok: false, reason: 'invalid-chars' }
-  if (!/^\d/.test(s)) return { ok: false, reason: 'no-integer-part' }
-  if (s.endsWith('.')) return { ok: false, reason: 'trailing-point' }
-  const dot = s.indexOf('.')
-  let cents: number
-  if (dot === -1) {
-    cents = Number(s) * 100
-  } else {
-    if (s.indexOf('.', dot + 1) !== -1) return { ok: false, reason: 'invalid-chars' }
-    const dec = s.slice(dot + 1)
-    if (dec.length > 2) return { ok: false, reason: 'decimals' }
-    cents = Number(s.slice(0, dot)) * 100 + Number(dec.padEnd(2, '0'))
+  // 纯分隔符输入视同空
+  if (s.replace(/[\s,_]/g, '') === '') return { ok: false, reason: 'empty' }
+  if (!/^[0-9.,\s_]+$/.test(s)) return { ok: false, reason: 'invalid-chars' }
+  const dots = s.split('.')
+  if (dots.length > 2) return { ok: false, reason: 'invalid-chars' }
+  const intPart = dots.length === 2 ? dots[0] : s
+  const decPart = dots.length === 2 ? dots[1] : ''
+  if (!/^\d/.test(intPart)) return { ok: false, reason: 'no-integer-part' }
+  if (dots.length === 2 && decPart === '') return { ok: false, reason: 'trailing-point' }
+  // 千分位严格分组:分隔符(逗号/空白/下划线)须同一字符且三位一组
+  // (1,280 / 1 280 / 1_000 ✓;1,,280 / 12,34 / 1__000 / 1, ✗)
+  if (/[\s,_]/.test(intPart)) {
+    const seps = intPart.match(/[\s,_]/g) as string[]
+    const sep = seps[0]
+    const okPattern = new RegExp('^\\d{1,3}(' + sep + '\\d{3})+$').test(intPart)
+    if (seps.some((c) => c !== sep) || !okPattern) {
+      return { ok: false, reason: 'bad-grouping' }
+    }
   }
+  if (dots.length === 2 && !/^\d{1,2}$/.test(decPart)) {
+    return { ok: false, reason: /^\d+$/.test(decPart) ? 'decimals' : 'invalid-chars' }
+  }
+  const digits = s.replace(/[\s,_]/g, '')
+  const cents =
+    dots.length === 1
+      ? Number(digits) * 100
+      : Number(dots[0].replace(/[\s,_]/g, '')) * 100 + Number(dots[1].padEnd(2, '0'))
   if (!Number.isSafeInteger(cents)) return { ok: false, reason: 'overflow' }
   if (cents > MAX_AMOUNT_CENTS) return { ok: false, reason: 'overflow' }
   return { ok: true, cents }

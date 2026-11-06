@@ -75,3 +75,31 @@ describe('parseAmount:边界', () => {
     expect(MAX_AMOUNT_CENTS).toBe(1e14)
   })
 })
+
+describe('parseAmount:千分位严格分组', () => {
+  test('规范分组仍接受', () => {
+    expect(parseAmount('1,280.50')).toEqual({ ok: true, cents: 128050 })
+    expect(parseAmount('12,340,000')).toEqual({ ok: true, cents: 1234000000 })
+    expect(parseAmount('1 280')).toEqual({ ok: true, cents: 128000 })
+    expect(parseAmount('1_000')).toEqual({ ok: true, cents: 100000 })
+  })
+
+  test.each([
+    ['1,,280'],
+    ['12,34'],
+    ['1__000'],
+    ['1,'],
+    [',123'],
+    ['1,280 500'],
+    ['1 28'],
+  ])('格式异常 %s → bad-grouping / no-integer-part', (input) => {
+    const r = parseAmount(input)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(['bad-grouping', 'no-integer-part']).toContain(r.reason)
+  })
+
+  test('bad-grouping 有可读文案', () => {
+    const r = parseAmount('12,34')
+    if (!r.ok) expect(AMOUNT_REASON_TEXT[r.reason]).toContain('三位一组')
+  })
+})

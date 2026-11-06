@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest'
+import { admitNode } from '../../src/core/admission'
 import { migrateV1toV2, runMigrations } from '../../src/core/migrate'
 import { SUPPORTED_SCHEMA_VERSION, type TripNode } from '../../src/core/schema'
 
@@ -90,5 +91,46 @@ describe('runMigrations 端到端 v1→v2', () => {
     const d = r.node.data as Record<string, unknown>
     expect(d.demo).toBeUndefined()
     expect((d.legacy as { demo?: { note?: string } }).demo?.note).toBe('旧演示')
+  })
+})
+
+describe('legacy 异常拒绝(迁移永不覆盖/丢弃既有内容)', () => {
+  test('legacy.demo 同键冲突 → 迁移失败,原值保留', () => {
+    const r = runMigrations(
+      v1Node({ demo: { note: '新' }, legacy: { demo: { note: '旧' }, custom: 1 } }),
+    )
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error).toContain('legacy.demo')
+    expect(r.error).toContain('冲突')
+  })
+
+  test('legacy 为数组 → 迁移失败', () => {
+    const r = runMigrations(v1Node({ demo: { note: 'X' }, legacy: ['原值'] }))
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain('数组')
+  })
+
+  test('legacy 为字符串 → 迁移失败', () => {
+    const r = runMigrations(v1Node({ demo: { note: 'X' }, legacy: '原值' }))
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain('string')
+  })
+
+  test('legacy 为 null 视同不存在,正常归档', () => {
+    const r = migrateV1toV2(v1Node({ demo: { note: 'X' }, legacy: null }))
+    const d = r.data as Record<string, unknown>
+    expect(d.demo).toBeUndefined()
+    expect((d.legacy as { demo?: { note?: string } }).demo?.note).toBe('X')
+  })
+
+  test('admission 层:异常 legacy → 只读 + 原因可见', () => {
+    const n = v1Node({ demo: { note: 'X' }, legacy: ['原值'] })
+    const adm = admitNode(JSON.stringify(n))
+    expect(adm.ok).toBe(true)
+    if (!adm.ok) return
+    expect(adm.mode).toBe('readonly')
+    expect(adm.reason).toContain('迁移失败')
+    expect(adm.reason).toContain('数组')
   })
 })
