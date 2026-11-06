@@ -503,22 +503,33 @@ async function performSave(node: TripNode, seq: number): Promise<void> {
     if (wasBlank) {
       // 工作节点沿用副本文件的真实 UUID(与磁盘文件一致,后续保存/草稿键对齐)。
       // 下载发起 ≠ 可靠落盘(浏览器可能拦截/取消/失败):恢复数据不能丢——
-      // 把旧空白键草稿**原样迁移**到新 UUID 键(不判断新旧:确认打开前,
-      // 下载文件是否真实存在不可知,草稿是唯一本地恢复数据);
-      // 之后用户打开下载文件且内容一致时,由 openFromJson 的签名比对清理冗余。
+      // 把旧空白键草稿**原样迁移**到新 UUID 键;迁移写入必须确认成功
+      // (配额满/隐私模式/序列化异常都会失败)才允许删旧键,
+      // 失败则保留旧空白草稿——它是唯一恢复入口,宁可双份也不可零份。
       const staleBlank = loadDraft(BLANK_TOOL_ID)
       node.project.id = snapshot.project.id
+      let migrationOk = true
       if (staleBlank) {
         const carried = staleBlank.node
         carried.project = { ...carried.project, id: snapshot.project.id }
-        saveDraft(carried, staleBlank.baseUpdatedAt)
+        const wr = saveDraft(carried, staleBlank.baseUpdatedAt)
+        if (!wr.ok) {
+          migrationOk = false
+          // 迁移失败:内存旅行数据保留(仅 id 保持 BLANK_TOOL_ID 原值不固化),
+          // 用户仍可继续编辑并再次保存;旧键原样保留
+          node.project.id = BLANK_TOOL_ID
+          state.storageError =
+            '旅行草稿迁移失败(' + wr.error + '),已保留原草稿;请尽快重试保存或使用「导出 JSON」'
+        }
       }
-      if (pendingDraft && pendingDraft.node.project.id === BLANK_TOOL_ID) {
-        pendingDraft.node.project.id = snapshot.project.id
-        pendingDraft.base = snapshot.updatedAt
-        flushDraft()
+      if (migrationOk) {
+        if (pendingDraft && pendingDraft.node.project.id === BLANK_TOOL_ID) {
+          pendingDraft.node.project.id = snapshot.project.id
+          pendingDraft.base = snapshot.updatedAt
+          flushDraft()
+        }
+        deleteDraft(BLANK_TOOL_ID)
       }
-      deleteDraft(BLANK_TOOL_ID)
     }
     adoptWriteResult(node, snapshot)
     rebaselinePendingDraft(node, snapshot, seq)

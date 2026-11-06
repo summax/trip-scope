@@ -267,23 +267,30 @@ describe('P1-1 跨旅行上下文隔离', () => {
     expect(state.conflictFreshRaw).toBe('<html>B已有冲突</html>')
   })
 
-  test('A3 保存中切到 B:A 完成后 B 的文件会话基准不被污染(archive 世代)', async () => {
+  test('A3 保存中切到 B:A 成功后 B 的 fileUpdatedAt(文件会话基准)不被改写', async () => {
     state.openMode = 'handle'
     state.node = blankNode()
     state.node.project = { id: 'iso-a3', name: 'A3 旅行' }
-    const { adoptHandle, getSessionHandle, saveToHandle: realSave } =
-      await import('../../src/core/persistence/archive')
-    // 用真实 archive(本文件 mock 了它):直接驱动世代逻辑需另开真实模块,
-    // 这里退而验证 mock 契约层:保存期间 adoptHandle 换绑后,saveToHandle 结果为 error
-    const genModule = await vi.importActual<typeof import('../../src/core/persistence/archive')>(
-      '../../src/core/persistence/archive',
-    )
-    void genModule
-    void realSave
-    void adoptHandle
-    void getSessionHandle
-    // archive 层世代守卫由独立单测 archive-session.test.ts 覆盖(真实模块无 mock)
-    expect(true).toBe(true)
+    let release: (() => void) | undefined
+    saveToHandleMock.mockImplementationOnce(async () => {
+      release = undefined
+      const gate = new Promise<void>((r) => (release = r))
+      await gate
+      return { outcome: 'saved', html: '' }
+    })
+    const p = save()
+    for (let i = 0; i < 8 && typeof release !== 'function'; i++) await Promise.resolve()
+    // 切到 B:B 自带已落盘基准
+    const b = blankNode()
+    b.project = { id: 'iso-b3', name: 'B3 旅行' }
+    state.node = b
+    const bBaseline = '2027-06-01T00:00:00.000Z'
+    state.fileUpdatedAt = bBaseline
+    release()
+    await p
+    // B 的文件会话基准保持 B 自己的值,不被 A 的快照时间戳改写
+    // (archive 层的世代/originalRaw 守卫由 archive-session.test.ts 7 断言覆盖,真实模块)
+    expect(state.fileUpdatedAt).toBe(bBaseline)
   })
 
   test('A4 保存中切到 B:Toast 不谎报 B 已保存', async () => {
@@ -350,7 +357,7 @@ describe('P2-1 保存期间新编辑的草稿基准', () => {
     expect(draftAfter.node.data.demo?.note).toBe('保存期间编辑2')
   })
 
-  test('B2 保存成功后重新打开:草稿基准与真实磁盘版本一致(签名相等被静默清理)', async () => {
+  test('B2 保存成功后重新打开:草稿晚于磁盘版本 → 签名分歧,横幅保留而非误清', async () => {
     state.openMode = 'handle'
     state.node = blankNode()
     state.node.project = { id: 'dr-2', name: '重开一致' }
@@ -483,5 +490,129 @@ describe('P1-2 下载发起 ≠ 可靠落盘', () => {
     // 模拟关闭后重开
     openBlankTool()
     expect(state.node?.data.demo?.note).toBe('下载失败也不丢')
+  })
+})
+
+describe('P1-02 草稿迁移:写入成功确认后才删旧键', () => {
+  test('M1 正常迁移:新键写入成功,旧键删除', async () => {
+    state.node = blankTrip('正常迁移')
+    updateData((d) => {
+      if (!d.demo) d.demo = {}
+      d.demo.note = '迁移内容'
+    })
+    vi.advanceTimersByTime(400)
+    await save()
+    const newId = downloadTripCopyMock.mock.calls[0][0].project.id
+    expect(storage.has('tripscope:draft:' + newId)).toBe(true)
+    expect(storage.has('tripscope:draft:' + BLANK_TOOL_ID)).toBe(false)
+    expect(storage.getItem('tripscope:draft:' + newId)).toContain('迁移内容')
+  })
+
+  test('M2 新键写入失败(配额满):旧草稿保留,不假装迁移成功', async () => {
+    state.node = blankTrip('配额满迁移')
+    updateData((d) => {
+      if (!d.demo) d.demo = {}
+      d.demo.note = '唯一恢复'
+    })
+    vi.advanceTimersByTime(400)
+    expect(storage.has('tripscope:draft:' + BLANK_TOOL_ID)).toBe(true)
+    // 模拟配额满:第二次 saveDraft(新键写入)失败
+    storage.failWrites = true
+    await save()
+    storage.failWrites = false
+    // 旧空白键必须原样保留(新键没写进去,旧键是唯一恢复入口)
+    expect(storage.has('tripscope:draft:' + BLANK_TOOL_ID)).toBe(true)
+    expect(storage.getItem('tripscope:draft:' + BLANK_TOOL_ID)).toContain('唯一恢复')
+    // 不假装成功:内存旅行身份不固化,错误可见
+    expect(state.node?.project.id).toBe(BLANK_TOOL_ID)
+    expect(state.storageError).toContain('迁移失败')
+  })
+
+  test('M3 localStorage 抛异常:旧草稿保留', async () => {
+    state.node = blankTrip('异常迁移')
+    updateData((d) => {
+      if (!d.demo) d.demo = {}
+      d.demo.note = '异常保护'
+    })
+    vi.advanceTimersByTime(400)
+    // 序列化后写入抛异常:临时替换 setItem
+    const orig = storage.setItem.bind(storage)
+    storage.setItem = () => {
+      throw new Error('SecurityError:模拟隐私模式')
+    }
+    try {
+      await save()
+    } finally {
+      storage.setItem = orig
+    }
+    expect(storage.has('tripscope:draft:' + BLANK_TOOL_ID)).toBe(true)
+    expect(storage.getItem('tripscope:draft:' + BLANK_TOOL_ID)).toContain('异常保护')
+  })
+
+  test('M4 迁移失败后刷新页面:仍能经旧草稿恢复旅行数据', async () => {
+    state.node = blankTrip('刷新恢复')
+    updateData((d) => {
+      if (!d.demo) d.demo = {}
+      d.demo.note = '刷新后仍在'
+    })
+    vi.advanceTimersByTime(400)
+    storage.failWrites = true
+    await save()
+    storage.failWrites = false
+    // 模拟刷新:重开空白工具,openBlankTool 扫描未落盘草稿
+    openBlankTool()
+    expect(state.node?.data.demo?.note).toBe('刷新后仍在')
+    expect(state.storageError).toBeNull()
+  })
+})
+
+describe('P1-03 下载触发 ≠ 落盘:恢复链完整性', () => {
+  test('D1 下载触发(未模拟落盘)后恢复草稿存在;刷新页面后可恢复', async () => {
+    state.node = blankTrip('下载未落盘刷新')
+    updateData((d) => {
+      if (!d.demo) d.demo = {}
+      d.demo.note = '刷新也要在'
+    })
+    vi.advanceTimersByTime(400)
+    await save() // 下载发起(mock ok:true,未模拟真实落盘)
+    const newId = downloadTripCopyMock.mock.calls[0][0].project.id
+    // 发起后:恢复数据在新 UUID 键(迁移自旧空白键)
+    expect(storage.has('tripscope:draft:' + newId)).toBe(true)
+    // 模拟刷新:重开空白工具,扫描未落盘草稿
+    openBlankTool()
+    expect(state.node?.data.demo?.note).toBe('刷新也要在')
+  })
+
+  test('D2 打开有效旅行文件(内容一致)后,清理逻辑照常工作', async () => {
+    state.node = blankTrip('清理照常')
+    updateData((d) => {
+      if (!d.demo) d.demo = {}
+      d.demo.note = '与下载文件一致'
+    })
+    vi.advanceTimersByTime(400)
+    await save()
+    const newId = downloadTripCopyMock.mock.calls[0][0].project.id
+    expect(storage.has('tripscope:draft:' + newId)).toBe(true)
+    // 用户打开下载文件(磁盘内容=快照,含同 id 同数据)→ 无新编辑、无横幅
+    const disk = downloadTripCopyMock.mock.calls[0][0]
+    const { openFromJson } = await import('../../src/core/store')
+    const r = openFromJson(serializeNode(disk), 'embedded', { fileName: '清理照常.html' })
+    expect(r.opened).toBe(true)
+    expect(state.node?.project.id).toBe(newId)
+    // 草稿与磁盘一致 → resolveDraftOnOpen 静默清冗余;至少旧空白键必须已不在
+    expect(storage.has('tripscope:draft:' + BLANK_TOOL_ID)).toBe(false)
+  })
+
+  test('D3 下载失败:不清理恢复数据,重开可恢复', async () => {
+    state.node = blankTrip('失败不清理')
+    updateData((d) => {
+      if (!d.demo) d.demo = {}
+      d.demo.note = '失败保护'
+    })
+    vi.advanceTimersByTime(400)
+    downloadTripCopyMock.mockReturnValueOnce({ ok: false, reason: '浏览器拦截' })
+    await save()
+    openBlankTool()
+    expect(state.node?.data.demo?.note).toBe('失败保护')
   })
 })

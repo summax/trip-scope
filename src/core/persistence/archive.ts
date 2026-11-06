@@ -132,42 +132,79 @@ export function resolveWriteBase(
   return { ok: true, base: snapshot, kind: 'full-app' }
 }
 
+/** 一次保存任务的会话上下文:发起时一次性捕获,异步全程只用它,不重读全局 */
+interface SaveContext {
+  handle: any
+  originalRaw: string | null
+  snapshot: string | null
+  snapshotOk: boolean
+  snapshotIssues: string[]
+  generation: number
+}
+
+function captureSaveContext(): SaveContext | null {
+  const handle = session.handle as any
+  if (!handle) return null
+  return {
+    handle,
+    originalRaw: session.originalRaw,
+    snapshot: session.snapshot,
+    snapshotOk: session.snapshotOk,
+    snapshotIssues: session.snapshotIssues,
+    generation: sessionGeneration,
+  }
+}
+
+/** 会话世代已变(用户中途打开了别的文件):旧任务立即作废 */
+function sessionSuperseded(ctx: SaveContext): boolean {
+  return sessionGeneration !== ctx.generation
+}
+
+const SESSION_SWITCH_DETAIL = '保存期间文件会话已切换,本次保存已中止,未写入任何内容'
+
 /** 句柄模式保存:尽力检测外部修改 → 底稿裁决 → 精确替换数据节点 → 写回原文件 */
 export async function saveToHandle(
   node: TripNode,
   opts?: { fullAppUpgrade?: boolean },
 ): Promise<SaveOutcome> {
-  const handle = session.handle as any
-  if (!handle) return { outcome: 'error', detail: '无文件句柄' }
-  // 发起时的会话世代:写盘完成时核对,中途换绑文件则本次作废
-  const gen = sessionGeneration
+  // 一次性捕获:handle/originalRaw/快照在异步全程取自本次捕获值,
+  // 不在 await 恢复后重读可能已被换绑的全局 session(否则会用 B 的基准判 A 的写回)
+  const ctx = captureSaveContext()
+  if (!ctx) return { outcome: 'error', detail: '无文件句柄' }
 
-  if (!(await ensureWritePermission(handle))) {
+  if (!(await ensureWritePermission(ctx.handle))) {
+    if (sessionSuperseded(ctx)) return { outcome: 'error', detail: SESSION_SWITCH_DETAIL }
     return { outcome: 'downgraded', detail: '未获得文件写权限' }
   }
+  if (sessionSuperseded(ctx)) return { outcome: 'error', detail: SESSION_SWITCH_DETAIL }
 
   let freshRaw: string
   try {
-    const f = await handle.getFile()
+    const f = await ctx.handle.getFile()
     freshRaw = await f.text()
   } catch {
+    if (sessionSuperseded(ctx)) return { outcome: 'error', detail: SESSION_SWITCH_DETAIL }
     return { outcome: 'downgraded', detail: '无法读取文件当前内容' }
   }
+  if (sessionSuperseded(ctx)) return { outcome: 'error', detail: SESSION_SWITCH_DETAIL }
 
-  // 外部修改检测为尽力检测:重读磁盘内容与会话开始时的原文比对(升级替换会整体覆盖,检测更必要)
-  if (freshRaw !== session.originalRaw) {
+  // 外部修改检测为尽力检测:重读磁盘内容与【本次捕获】的原文比对(升级替换会整体覆盖,检测更必要)
+  if (freshRaw !== ctx.originalRaw) {
+    if (sessionSuperseded(ctx)) return { outcome: 'error', detail: SESSION_SWITCH_DETAIL }
     return { outcome: 'conflict', freshRaw }
   }
+  if (sessionSuperseded(ctx)) return { outcome: 'error', detail: SESSION_SWITCH_DETAIL }
 
-  // 底稿裁决:普通写回=磁盘原文;升级写回=当前应用完整快照(应用代码与数据一并升级)
+  // 底稿裁决:普通写回=磁盘原文;升级写回=【本次捕获】的应用完整快照(应用代码与数据一并升级)
   const wb = resolveWriteBase(
     freshRaw,
     opts?.fullAppUpgrade === true,
-    session.snapshot,
-    session.snapshotOk,
-    session.snapshotIssues,
+    ctx.snapshot,
+    ctx.snapshotOk,
+    ctx.snapshotIssues,
   )
   if (!wb.ok) {
+    if (sessionSuperseded(ctx)) return { outcome: 'error', detail: SESSION_SWITCH_DETAIL }
     return {
       outcome: 'error',
       detail: '应用升级写回被拒绝(' + wb.reason + ');请改用「另存为副本」或「导出 JSON」',
@@ -176,6 +213,7 @@ export async function saveToHandle(
 
   const r = replaceDataNode(wb.base, node)
   if (!r.ok) {
+    if (sessionSuperseded(ctx)) return { outcome: 'error', detail: SESSION_SWITCH_DETAIL }
     return {
       outcome: 'downgraded',
       detail:
@@ -186,19 +224,22 @@ export async function saveToHandle(
     }
   }
 
+  // 实际写入前最后一次核对:世代已变则旧任务不得把 A 的内容写进任何文件
+  if (sessionSuperseded(ctx)) return { outcome: 'error', detail: SESSION_SWITCH_DETAIL }
   try {
-    const w = await handle.createWritable()
+    const w = await ctx.handle.createWritable()
     await w.write(r.html)
     await w.close()
   } catch (e) {
+    if (sessionSuperseded(ctx)) return { outcome: 'error', detail: SESSION_SWITCH_DETAIL }
     return {
       outcome: 'downgraded',
       detail: '写入失败:' + (e instanceof Error ? e.message : String(e)),
     }
   }
 
-  // 写盘完成时核对世代:中途用户已打开别的文件,本次写盘内容不得记入新文件会话
-  if (sessionGeneration !== gen) {
+  // 写盘完成核对:世代已变则结果废弃——originalRaw 属于新会话,旧任务不得覆盖
+  if (sessionSuperseded(ctx)) {
     return { outcome: 'error', detail: '保存期间文件会话已切换,本次写盘结果已废弃' }
   }
   session.originalRaw = r.html
