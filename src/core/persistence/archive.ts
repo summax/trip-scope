@@ -4,6 +4,7 @@ import {
   validateSnapshotHtml,
   type TripNode,
 } from '../schema'
+import { saveLastHandle } from './handleStore'
 
 /**
  * 文件保存链(与 schema.ts 的边界规则配合):
@@ -144,6 +145,25 @@ export async function saveToHandle(node: TripNode): Promise<SaveOutcome> {
 export function adoptHandle(html: string, handle: unknown): void {
   session.handle = handle
   session.originalRaw = html
+  persistLastHandle(handle)
+}
+
+/** 当前会话绑定的文件名(句柄模式);嵌入模式由调用方从 location 推导 */
+export function sessionFileName(): string | null {
+  const h = session.handle as { name?: unknown } | null
+  return typeof h?.name === 'string' && h.name !== '' ? h.name : null
+}
+
+/** 尽力而为持久化最近绑定的文件句柄,供刷新后重连(见 handleStore) */
+function persistLastHandle(handle: unknown): void {
+  try {
+    void saveLastHandle({
+      handle,
+      fileName: String((handle as { name?: unknown })?.name ?? ''),
+    })
+  } catch {
+    /* 尽力而为 */
+  }
 }
 
 export function clearSessionFile(): void {

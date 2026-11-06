@@ -79,6 +79,7 @@ export async function run(page) {
   await page.getByRole('button', { name: '打开文件' }).click()
   await sleep(700)
   report('S14a 句柄模式徽标出现', (await page.getByText('句柄模式(可写回原文件)').count()) === 1)
+  report('S14a2 句柄模式文件名徽标显示当前文件(B1 回归)', (await page.getByText('示例旅行.html').count()) >= 1)
   const nameVal = await page.getByPlaceholder(/2027 国庆云南旅行/).inputValue()
   report('S14b 打开的是磁盘数据', nameVal.includes('示例:2027 国庆云南(骨架演示)'), nameVal)
   await page.getByPlaceholder(/可输入任意字符/).fill('句柄写回编辑')

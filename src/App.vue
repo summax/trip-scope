@@ -7,12 +7,14 @@ import ForeignScreen from './components/ForeignScreen.vue'
 import SafeScreen from './components/SafeScreen.vue'
 import ConflictModal from './components/ConflictModal.vue'
 import UpgradeModal from './components/UpgradeModal.vue'
+import ReconnectBar from './components/ReconnectBar.vue'
 import DraftsPanel from './components/DraftsPanel.vue'
 </script>
 
 <template>
   <div class="flex min-h-dvh flex-col bg-bg text-ink">
     <TopBar />
+    <ReconnectBar />
     <Banners />
     <main class="mx-auto w-full max-w-5xl flex-1 px-4 py-5">
       <TripScreen v-if="state.screen === 'trip' && state.node" />

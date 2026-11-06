@@ -10,6 +10,7 @@ import * as sUi from './s-ui.mjs'
 import * as sHandle from './s-handle.mjs'
 import * as sReview from './s-review.mjs'
 import * as sReview2 from './s-review2.mjs'
+import * as sFeel from './s-feel.mjs'
 
 async function startBrowser() {
   // Windows/Hyper-V 会保留部分端口区段,逐个尝试直至 CDP 就绪
@@ -39,6 +40,7 @@ async function main() {
     await sHandle.run(page)
     await sReview.run(page)
     await sReview2.run(page)
+    await sFeel.run(page)
   } catch (e) {
     report('X 运行异常中断', false, String(e?.message ?? e))
     await page.screenshot({ path: path.join(ARTIFACTS, 'x-error.png') }).catch(() => {})

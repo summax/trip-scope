@@ -1,11 +1,21 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watchEffect } from 'vue'
 import { Compass, FolderOpen, Save, CopyPlus, Download, Upload, FilePlus2, Archive, Sun, Moon } from 'lucide-vue-next'
 import { state, save, saveAsCopy, openHandleFile, newTrip, doExportJson, toggleTheme, importFile, openDraftsPanel } from '../core/store'
 
 const fileInput = ref<HTMLInputElement | null>(null)
 const canSave = computed(() => state.screen === 'trip' && !state.readonly && state.node !== null)
 const saveLabel = computed(() => (state.openMode === 'handle' ? '保存到文件' : '保存(下载副本)'))
+const dirty = computed(
+  () =>
+    state.screen === 'trip' &&
+    !state.readonly &&
+    state.node !== null &&
+    state.node.updatedAt !== state.fileUpdatedAt,
+)
+watchEffect(() => {
+  document.title = 'TripScope · 旅行费用计划' + (dirty.value ? '(未保存)' : '')
+})
 
 function onImportClick(): void {
   fileInput.value?.click()
@@ -33,6 +43,14 @@ function onFileChosen(e: Event): void {
       </div>
 
       <div class="flex flex-1 flex-wrap items-center justify-end gap-1.5">
+        <span v-if="state.currentFileName" class="badge" title="当前文件">{{ state.currentFileName }}</span>
+        <span
+          v-if="dirty"
+          class="badge border-danger/40 text-danger"
+          title="有未保存到文件的修改(Ctrl/Cmd+S 保存)"
+        >
+          未保存
+        </span>
         <button class="btn" :disabled="!state.pickerSupported" title="打开旅行文件(句柄模式)" @click="openHandleFile">
           <FolderOpen :size="15" />
           <span class="hidden sm:inline">打开文件</span>

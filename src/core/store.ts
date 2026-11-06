@@ -33,9 +33,11 @@ import {
   openTripViaPicker,
   saveAsViaPicker,
   saveToHandle,
+  sessionFileName,
   snapshotStatus,
   pickerSupported,
 } from './persistence/archive'
+import { loadLastHandle, clearLastHandle } from './persistence/handleStore'
 import { exportJson, importFromFile } from './persistence/transfer'
 
 /* ------------------------------------------------------------------ */
@@ -75,6 +77,10 @@ export interface State {
   /** 句柄模式下,本次会话首次写回将把磁盘原文件从 v{N} 原地升级;非 null 时保存前需确认 */
   upgradeFromVersion: number | null
   upgradeConfirmOpen: boolean
+  /** 刷新后可重连的最近文件(句柄经 IndexedDB 持久化) */
+  reconnectOffer: { fileName: string } | null
+  /** 当前上下文的文件名锚点:句柄模式=句柄文件名;嵌入模式=宿主文件名 */
+  currentFileName: string | null
 }
 
 export const state = reactive<State>({
@@ -99,6 +105,8 @@ export const state = reactive<State>({
   appVersion: __APP_VERSION__,
   upgradeFromVersion: null,
   upgradeConfirmOpen: false,
+  reconnectOffer: null,
+  currentFileName: null,
 })
 
 /* toast 自动消失定时器 */
@@ -144,6 +152,8 @@ interface OpenContext {
   skipDraftCheck?: boolean
   /** 准入跑过迁移链时的迁移前版本号(仅 handle 模式参与升级确认裁决) */
   migratedFrom?: number
+  /** 句柄模式的文件名锚点:调用方在准入成功后显式传入,消除「先 adopt 再 open」的顺序依赖 */
+  fileName?: string | null
 }
 
 function openTrip(
@@ -165,6 +175,16 @@ function openTrip(
   state.safeDrafts = []
   state.upgradeFromVersion = null
   upgradeWriteConfirmed = false
+  // 文件名锚点:调用方显式传入优先;句柄模式退回会话句柄(恢复/重载等会话已绑定时);
+  // 嵌入模式读宿主文件(location 不可用时为 null)
+  state.currentFileName =
+    opts.fileName !== undefined
+      ? opts.fileName
+      : opts.openMode === 'handle'
+        ? sessionFileName()
+        : typeof location !== 'undefined'
+          ? decodeURIComponent(location.pathname.split('/').pop() ?? '') || null
+          : null
   if (
     opts.openMode === 'handle' &&
     typeof opts.migratedFrom === 'number' &&
@@ -198,7 +218,7 @@ export interface OpenJsonResult {
 export function openFromJson(
   json: string,
   openMode: OpenMode,
-  opts?: { fileUpdatedAt?: string | null; skipDraftCheck?: boolean },
+  opts?: { fileUpdatedAt?: string | null; skipDraftCheck?: boolean; fileName?: string | null },
 ): OpenJsonResult {
   const adm = admitNode(json)
   if (!adm.ok) {
@@ -216,6 +236,7 @@ export function openFromJson(
     readonlyReason: adm.reason ?? '',
     skipDraftCheck: opts?.skipDraftCheck,
     migratedFrom: adm.migratedFrom,
+    fileName: opts?.fileName,
   })
   return { opened: true }
 }
@@ -356,10 +377,16 @@ export async function openHandleFile(): Promise<void> {
     return
   }
   // 准入在工厂内强制执行;仅在成功打开后才采纳句柄(损坏/外来文件不采纳,写回通道保持关闭)
-  const opened = openFromJson(ex.json, 'handle')
+  const opened = openFromJson(ex.json, 'handle', { fileName: unknownHandleName(r.handle) })
   if (opened.opened) {
     adoptHandle(r.html, r.handle)
   }
+}
+
+/** unknown 句柄取文件名;无名字符串时返回 null */
+function unknownHandleName(handle: unknown): string | null {
+  const n = (handle as { name?: unknown } | null)?.name
+  return typeof n === 'string' && n !== '' ? n : null
 }
 
 export async function save(): Promise<void> {
@@ -437,6 +464,8 @@ export async function saveAsCopy(): Promise<void> {
 
 export function doExportJson(): void {
   if (!state.node || state.screen !== 'trip') return
+  // 落盘痕迹必须准:JSON 导出也是落盘路径,与 save/saveAsCopy 同一纪律
+  state.node.appVersion = __APP_VERSION__
   const r = exportJson(state.node)
   if (r.ok) setToast('已导出「' + r.fileName + '」')
 }
@@ -475,10 +504,83 @@ export function upgradeCopyInstead(): void {
 }
 
 /* ------------------------------------------------------------------ */
-/* 外部修改冲突(句柄模式写回前检测到磁盘内容变化)                        */
+/* 刷新后重连(句柄持久化)                                               */
 /* ------------------------------------------------------------------ */
 
+/** 启动时读取持久化槽位,填充重连邀请。不自动连接:复权需要用户手势 */
+export async function initReconnectOffer(): Promise<void> {
+  const p = await loadLastHandle()
+  if (!p || !p.fileName) return
+  state.reconnectOffer = { fileName: p.fileName }
+}
+
+/** 忽略:关闭邀请条并删除持久化槽位,不再提示 */
+export function dismissReconnect(): void {
+  state.reconnectOffer = null
+  void clearLastHandle()
+}
+
+/**
+ * 重连最近文件:复权(重连按钮点击即用户手势)→ 重读磁盘 → 准入 → 句柄模式重新打开。
+ * 任何失败都不静默:toast 说明原因;文件已消失时清除槽位,不悬挂死邀请。
+ */
+export async function reconnectLastFile(): Promise<void> {
+  const offer = state.reconnectOffer
+  if (!offer) return
+  const p = await loadLastHandle()
+  if (!p) {
+    state.reconnectOffer = null
+    return
+  }
+  const handle = p.handle as {
+    queryPermission?: (o: { mode: string }) => Promise<string>
+    requestPermission?: (o: { mode: string }) => Promise<string>
+    getFile?: () => Promise<File>
+  }
+  let granted = false
+  try {
+    if (typeof handle.queryPermission === 'function') {
+      granted = (await handle.queryPermission({ mode: 'readwrite' })) === 'granted'
+    }
+    if (!granted && typeof handle.requestPermission === 'function') {
+      granted = (await handle.requestPermission({ mode: 'readwrite' })) === 'granted'
+    }
+  } catch {
+    granted = false
+  }
+  if (!granted) {
+    setToast('未能获得「' + offer.fileName + '」的写权限,未重连')
+    return
+  }
+  let text: string
+  try {
+    const f = await handle.getFile?.()
+    if (!f) throw new Error('句柄无 getFile')
+    text = await f.text()
+  } catch {
+    setToast('「' + offer.fileName + '」已无法读取(可能被移动或删除),已清除重连记录')
+    state.reconnectOffer = null
+    void clearLastHandle()
+    return
+  }
+  const ex = extractDataNode(text)
+  if (!ex.ok) {
+    setToast('「' + offer.fileName + '」结构异常,未打开')
+    return
+  }
+  const opened = openFromJson(ex.json, 'handle', { fileName: offer.fileName })
+  if (opened.opened) {
+    adoptHandle(text, p.handle)
+    state.reconnectOffer = null
+    setToast('已重新连接「' + offer.fileName + '」')
+  }
+}
+
 export type ConflictChoice = 'reload' | 'copy' | 'cancel'
+
+/* ------------------------------------------------------------------ */
+/* 外部修改冲突(句柄模式写回前检测到磁盘内容变化)                        */
+/* ------------------------------------------------------------------ */
 
 export async function resolveExternalConflict(choice: ConflictChoice): Promise<void> {
   const raw = state.conflictFreshRaw
@@ -496,7 +598,7 @@ export async function resolveExternalConflict(choice: ConflictChoice): Promise<v
     setToast('磁盘文件已损坏,无法重载;当前编辑仍在草稿中,请「另存为副本」或「导出 JSON」')
     return
   }
-  const opened = openFromJson(ex.json, 'handle')
+  const opened = openFromJson(ex.json, 'handle', { fileName: sessionFileName() })
   if (opened.opened) {
     adoptHandle(raw, getSessionHandle())
     setToast('已重载磁盘最新内容')

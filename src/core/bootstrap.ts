@@ -10,6 +10,8 @@ export function run(): void {
   archive.captureSnapshot()
   store.initTheme()
   store.initRuntimeFlags()
+  // 读取持久化句柄槽位,填充「重新连接」邀请(异步,不阻塞打开链路)
+  void store.initReconnectOffer()
 
   const ex = extractDataNode(document.documentElement.outerHTML)
   if (!ex.ok) {
