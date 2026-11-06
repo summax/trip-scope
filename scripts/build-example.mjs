@@ -5,7 +5,8 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
  * 注意:节点读写逻辑与 src/core/schema.ts 保持一致(严格边界、`<` 转义)。
  */
 
-const RE = /<script id="app-data" type="application\/json">([\s\S]*?)<\/script>/g
+// 与 src/core/schema.ts 的 NODE_RE 保持同构:`[/]` 字符类防自匹配,分组 1=开标签,2=数据
+const RE = /(<script id="app-data" type="application[/]json">)([\s\S]*?)<\/script>/g
 
 const html = readFileSync(new URL('../dist/trip-scope.html', import.meta.url), 'utf8')
 
@@ -37,7 +38,8 @@ const node = {
 }
 
 const json = JSON.stringify(node, null, 2).replace(/</g, '\\u003c')
-const out = html.replace(RE, () => `<script id="app-data" type="application/json">${json}</script>`)
+// 仅替换分组 1(开标签)之后的内容,保留开标签原文
+const out = html.replace(RE, (_m, open) => open + json + '</script>')
 
 mkdirSync(new URL('../examples/', import.meta.url), { recursive: true })
 writeFileSync(new URL('../examples/示例旅行.html', import.meta.url), out, 'utf8')

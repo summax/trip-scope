@@ -6,6 +6,7 @@ import {
   extractDataNode,
   newId,
   nowIso,
+  serializeNode,
   type DemoItem,
   type DraftEntry,
   type TripData,
@@ -16,10 +17,12 @@ import {
   deleteDraft,
   loadDraft,
   listDrafts,
+  listUnsavedDrafts,
   resolveDraftOnOpen,
   saveDraft,
   loadTheme,
   saveTheme,
+  type DraftListItem,
 } from './persistence/storage'
 import {
   adoptHandle,
@@ -41,12 +44,7 @@ import { exportJson, importFromFile } from './persistence/transfer'
 export type ScreenMode = 'trip' | 'foreign' | 'safe'
 export type OpenMode = 'embedded' | 'handle'
 
-export interface SafeDraftItem {
-  id: string
-  name: string
-  savedAt: string
-  schemaVersion: number
-}
+export type SafeDraftItem = DraftListItem
 
 export interface DraftBannerState {
   entry: DraftEntry
@@ -67,6 +65,8 @@ export interface State {
   toast: string | null
   conflictFreshRaw: string | null
   safeDrafts: SafeDraftItem[]
+  draftsPanelOpen: boolean
+  draftsPanelList: SafeDraftItem[]
   theme: 'light' | 'dark'
   snapshotIssues: string[]
   pickerSupported: boolean
@@ -87,6 +87,8 @@ export const state = reactive<State>({
   toast: null,
   conflictFreshRaw: null,
   safeDrafts: [],
+  draftsPanelOpen: false,
+  draftsPanelList: [],
   theme: 'light',
   snapshotIssues: [],
   pickerSupported: false,
@@ -127,10 +129,11 @@ interface OpenContext {
   skipDraftCheck?: boolean
 }
 
-export function openTrip(
+function openTrip(
   node: TripNode,
   opts: OpenContext,
 ): void {
+  flushDraft()
   state.screen = 'trip'
   state.readonly = opts.readonly === true
   state.readonlyReason = opts.readonlyReason ?? ''
@@ -145,7 +148,7 @@ export function openTrip(
   state.safeDrafts = []
 
   if (!state.readonly && !opts.skipDraftCheck) {
-    const r = resolveDraftOnOpen(node.project.id, node.data)
+    const r = resolveDraftOnOpen(node.project.id, node)
     if (r.entry) {
       state.draftBanner = {
         entry: r.entry,
@@ -153,6 +156,70 @@ export function openTrip(
       }
     }
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* 上下文准入工厂:所有把旅行数据载入上下文的路径都经此处,                */
+/* 绕过准入在结构上不可能(openTrip 不对外导出)                          */
+/* ------------------------------------------------------------------ */
+
+export interface OpenJsonResult {
+  opened: boolean
+}
+
+/** JSON 文本 → 准入(格式/版本/迁移)→ 打开上下文 */
+export function openFromJson(
+  json: string,
+  openMode: OpenMode,
+  opts?: { fileUpdatedAt?: string | null; skipDraftCheck?: boolean },
+): OpenJsonResult {
+  const adm = admitNode(json)
+  if (!adm.ok) {
+    if (adm.kind === 'corrupted') {
+      openSafe('数据损坏(' + (adm.detail ?? '') + ');原文件未被修改,可尝试恢复本地草稿')
+    } else {
+      setForeign('不是 TripScope 旅行数据(' + (adm.detail ?? '') + ')')
+    }
+    return { opened: false }
+  }
+  openTrip(adm.node, {
+    openMode,
+    fileUpdatedAt: opts?.fileUpdatedAt !== undefined ? opts.fileUpdatedAt : adm.node.updatedAt,
+    readonly: adm.mode === 'readonly',
+    readonlyReason: adm.reason ?? '',
+    skipDraftCheck: opts?.skipDraftCheck,
+  })
+  return { opened: true }
+}
+
+/** 从草稿条目恢复(同样强制过准入):恢复路径不可能载入未过准入的数据 */
+export function restoreDraftNode(
+  node: TripNode,
+  openMode: OpenMode,
+  fileUpdatedAt: string | null,
+): OpenJsonResult {
+  return openFromJson(serializeNode(node), openMode, {
+    fileUpdatedAt,
+    skipDraftCheck: true,
+  })
+}
+
+/**
+ * 空白工具打开:恢复最近一份从未落盘的草稿(创建于空白工具、未保存过文件),
+ * 防止刷新/关闭导致未保存内容成为孤儿键;没有则开全新空白。
+ */
+export function openBlankTool(): void {
+  clearSessionFile()
+  const candidates = listUnsavedDrafts()
+  const d = candidates.find((e) => e.node.project.id === BLANK_TOOL_ID) ?? candidates[0]
+  if (d) {
+    const restored = restoreDraftNode(d.node, 'embedded', null)
+    if (restored.opened && d.node.project.id !== BLANK_TOOL_ID) {
+      setToast('已恢复未保存的旅行「' + d.node.project.name + '」')
+    }
+    return
+  }
+  openTrip(blankNode(), { openMode: 'embedded', fileUpdatedAt: null, skipDraftCheck: true })
 }
 
 /* ------------------------------------------------------------------ */
@@ -169,7 +236,8 @@ export function updateData(mutate: (data: TripData) => void): void {
 
 export function renameProject(name: string): void {
   if (!canEdit() || !state.node) return
-  state.node.project.name = name.trim()
+  // 不在输入回调里 trim:否则尾随空格无法输入;文件命名时由 sanitizeFileName 兜底
+  state.node.project.name = name
   state.node.updatedAt = nowIso()
   scheduleDraft()
 }
@@ -178,17 +246,30 @@ function canEdit(): boolean {
   return state.screen === 'trip' && !state.readonly && state.node !== null
 }
 
+/** 排期时的快照:回调触发时上下文可能已切换,必须写排期时的内容与键 */
+let pendingDraft: { node: TripNode; base: string | null } | null = null
+
 function scheduleDraft(): void {
   if (state.readonly || !state.node) return
+  pendingDraft = { node: deepClone(state.node), base: state.fileUpdatedAt }
   if (draftTimer) clearTimeout(draftTimer)
-  draftTimer = setTimeout(() => {
-    if (!state.node) return
-    const r = saveDraft(state.node, state.fileUpdatedAt)
-    if (!r.ok) {
-      state.storageError =
-        '本地草稿保存失败(' + r.error + '),请尽快使用「保存」或「导出 JSON」'
-    }
-  }, 300)
+  draftTimer = setTimeout(flushDraft, 300)
+}
+
+/** 立即把排期中的草稿写入存储(上下文切换前 / beforeunload 时调用) */
+export function flushDraft(): void {
+  if (draftTimer) {
+    clearTimeout(draftTimer)
+    draftTimer = null
+  }
+  if (!pendingDraft) return
+  const p = pendingDraft
+  pendingDraft = null
+  const r = saveDraft(p.node, p.base)
+  if (!r.ok) {
+    state.storageError =
+      '本地草稿保存失败(' + r.error + '),请尽快使用「保存」或「导出 JSON」'
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -197,9 +278,11 @@ function scheduleDraft(): void {
 
 export function restoreDraft(): void {
   if (!state.draftBanner || !state.node) return
-  // 横幅持有的 entry 是内存副本,即使草稿存储已被后续编辑覆盖也能完整恢复
-  state.node = state.draftBanner.entry.node
+  // 横幅持有的 entry 是内存副本,即使草稿存储已被后续编辑覆盖也能完整恢复;
+  // 恢复同样经过准入(高版本草稿 → 只读),不可能绕过
+  const r = restoreDraftNode(state.draftBanner.entry.node, state.openMode, state.fileUpdatedAt)
   state.draftBanner = null
+  if (!r.opened) return
   setToast('已恢复草稿')
 }
 
@@ -244,23 +327,11 @@ export async function openHandleFile(): Promise<void> {
     setToast('所选文件不是有效的 TripScope 旅行文件:' + (ex.reason === 'multiple' ? '数据节点不唯一' : '未找到数据节点'))
     return
   }
-  const adm = admitNode(ex.json)
-  if (!adm.ok) {
-    if (adm.kind === 'corrupted') {
-      // 数据损坏:不采纳句柄,写回通道保持关闭,原文件不会被破坏
-      openSafe('所选文件数据损坏(' + (adm.detail ?? '结构不符') + ');已进入安全模式,原文件不会被写回')
-    } else {
-      setForeign('所选文件不是 TripScope 旅行数据(' + (adm.detail ?? '') + ')')
-    }
-    return
+  // 准入在工厂内强制执行;仅在成功打开后才采纳句柄(损坏/外来文件不采纳,写回通道保持关闭)
+  const opened = openFromJson(ex.json, 'handle')
+  if (opened.opened) {
+    adoptHandle(r.html, r.handle)
   }
-  adoptHandle(r.html, r.handle)
-  openTrip(adm.node, {
-    openMode: 'handle',
-    fileUpdatedAt: adm.node.updatedAt,
-    readonly: adm.mode === 'readonly',
-    readonlyReason: adm.reason ?? '',
-  })
 }
 
 export async function save(): Promise<void> {
@@ -340,13 +411,7 @@ export async function importFile(file: File): Promise<void> {
     return
   }
   clearSessionFile()
-  openTrip(r.node, {
-    openMode: 'embedded',
-    fileUpdatedAt: r.node.updatedAt,
-    readonly: r.mode === 'readonly',
-    readonlyReason: r.reason ?? '',
-    skipDraftCheck: false,
-  })
+  openFromJson(serializeNode(r.node), 'embedded')
   setToast('导入成功')
 }
 
@@ -366,26 +431,17 @@ export async function resolveExternalConflict(choice: ConflictChoice): Promise<v
     return
   }
 
-  // reload:以磁盘最新内容为准重载(句柄仍有效,继续绑定该文件)
+  // reload:以磁盘最新内容为准重载(句柄仍有效,继续绑定该文件);重载同样强制过准入
   const ex = extractDataNode(raw)
   if (!ex.ok) {
     setToast('磁盘文件已损坏,无法重载;当前编辑仍在草稿中,请「另存为副本」或「导出 JSON」')
     return
   }
-  const adm = admitNode(ex.json)
-  if (!adm.ok) {
-    if (adm.kind === 'corrupted') openSafe('磁盘文件数据损坏,已进入安全模式;当前编辑仍在草稿中')
-    else setForeign('磁盘文件不是 TripScope 旅行数据(' + (adm.detail ?? '') + ')')
-    return
+  const opened = openFromJson(ex.json, 'handle')
+  if (opened.opened) {
+    adoptHandle(raw, getSessionHandle())
+    setToast('已重载磁盘最新内容')
   }
-  adoptHandle(raw, getSessionHandle())
-  openTrip(adm.node, {
-    openMode: 'handle',
-    fileUpdatedAt: adm.node.updatedAt,
-    readonly: adm.mode === 'readonly',
-    readonlyReason: adm.reason ?? '',
-  })
-  setToast('已重载磁盘最新内容')
 }
 
 /* ------------------------------------------------------------------ */
@@ -421,12 +477,53 @@ export function restoreFromSafe(id: string): void {
     return
   }
   clearSessionFile()
-  openTrip(d.node, { openMode: 'embedded', fileUpdatedAt: d.baseUpdatedAt, skipDraftCheck: true })
+  const r = restoreDraftNode(d.node, 'embedded', d.baseUpdatedAt)
+  if (!r.opened) return
   setToast('已恢复草稿「' + d.node.project.name + '」')
 }
 
 export function refreshSafeDrafts(): void {
   state.safeDrafts = listDrafts()
+}
+
+/* ------------------------------------------------------------------ */
+/* 草稿箱:普通界面查看/恢复/删除全部草稿(含未落盘的孤儿草稿)              */
+/* ------------------------------------------------------------------ */
+
+export function openDraftsPanel(): void {
+  state.draftsPanelOpen = true
+  state.draftsPanelList = listDrafts()
+}
+
+export function closeDraftsPanel(): void {
+  state.draftsPanelOpen = false
+}
+
+function refreshDraftsPanel(): void {
+  state.draftsPanelList = listDrafts()
+}
+
+/** 从草稿箱恢复:同样强制过准入;成败分别反馈,不谎报 */
+export function restoreFromPanel(id: string): void {
+  const d = loadDraft(id)
+  if (!d) {
+    setToast('草稿已不存在,请刷新草稿箱')
+    refreshDraftsPanel()
+    return
+  }
+  clearSessionFile()
+  const r = restoreDraftNode(d.node, 'embedded', d.baseUpdatedAt)
+  state.draftsPanelOpen = false
+  if (!r.opened) return
+  setToast('已恢复草稿「' + d.node.project.name + '」')
+}
+
+export function deleteFromPanel(id: string): void {
+  // 待冲刷的排期快照属于被删草稿时一并清除,否则 300ms 后复活,提示与事实不符
+  if (pendingDraft && pendingDraft.node.project.id === id) pendingDraft = null
+  deleteDraft(id)
+  refreshDraftsPanel()
+  setToast('草稿已删除')
 }
 
 /* ------------------------------------------------------------------ */

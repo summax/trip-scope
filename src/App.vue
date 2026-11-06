@@ -6,6 +6,7 @@ import TripScreen from './components/TripScreen.vue'
 import ForeignScreen from './components/ForeignScreen.vue'
 import SafeScreen from './components/SafeScreen.vue'
 import ConflictModal from './components/ConflictModal.vue'
+import DraftsPanel from './components/DraftsPanel.vue'
 </script>
 
 <template>
@@ -26,5 +27,6 @@ import ConflictModal from './components/ConflictModal.vue'
       </span>
     </footer>
     <ConflictModal />
+    <DraftsPanel />
   </div>
 </template>

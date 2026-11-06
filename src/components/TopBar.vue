@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { Compass, FolderOpen, Save, CopyPlus, Download, Upload, FilePlus2, Sun, Moon } from 'lucide-vue-next'
-import { state, save, saveAsCopy, openHandleFile, newTrip, doExportJson, toggleTheme, importFile } from '../core/store'
+import { Compass, FolderOpen, Save, CopyPlus, Download, Upload, FilePlus2, Archive, Sun, Moon } from 'lucide-vue-next'
+import { state, save, saveAsCopy, openHandleFile, newTrip, doExportJson, toggleTheme, importFile, openDraftsPanel } from '../core/store'
 
 const fileInput = ref<HTMLInputElement | null>(null)
 const canSave = computed(() => state.screen === 'trip' && !state.readonly && state.node !== null)
@@ -61,6 +61,11 @@ function onFileChosen(e: Event): void {
           <FilePlus2 :size="15" />
           <span class="hidden sm:inline">新建旅行</span>
           <span class="sm:hidden">新建</span>
+        </button>
+        <button class="btn" title="草稿箱:查看/恢复/删除全部本地草稿" @click="openDraftsPanel">
+          <Archive :size="15" />
+          <span class="hidden sm:inline">草稿箱</span>
+          <span class="sm:hidden">草稿</span>
         </button>
         <button class="btn" title="切换主题" @click="toggleTheme">
           <Sun v-if="state.theme === 'dark'" :size="15" />

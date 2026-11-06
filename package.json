@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc --noEmit && vite build && node scripts/rename.mjs",
+    "build": "vue-tsc --noEmit && vite build && node scripts/rename.mjs && node scripts/build-example.mjs",
     "example": "node scripts/build-example.mjs",
+    "verify": "node tests/verify.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -16,6 +17,7 @@
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.4",
     "@vitejs/plugin-vue": "^6.0.10",
+    "playwright-core": "^1.57.0",
     "tailwindcss": "^4.3.4",
     "typescript": "^6.0.3",
     "vite": "^8.3.6",

@@ -125,27 +125,28 @@ export function parseNodeJson(jsonText: string): NodeParseResult {
 /* ------------------------------------------------------------------ */
 
 // `[/]` 字符类写法:模式源码文本不再匹配自身,免受压缩器改写影响
-const NODE_RE = /<script id="app-data" type="application[/]json">([\s\S]*?)<\/script>/g
+// `[/]` 字符类写法:模式源码文本不再匹配自身,免受压缩器改写影响;分组 1=开标签,2=数据
+const NODE_RE = /(<script id="app-data" type="application[/]json">)([\s\S]*?)<\/script>/g
 // 属性顺序宽容版(仍要求开标签内含 application/json),命中数同样必须为 1
-const NODE_RE_LOOSE = /<script\b[^>]*\bid=["']app-data["'][^>]*>([\s\S]*?)<\/script>/gi
+const NODE_RE_LOOSE = /(<script\b[^>]*\bid=["']app-data["'][^>]*>)([\s\S]*?)<\/script>/gi
 
 export type ExtractResult =
-  | { ok: true; json: string; start: number; end: number }
+  | { ok: true; json: string; openTag: string; start: number; end: number }
   | { ok: false; reason: 'missing' | 'multiple' }
 
 export function findDataNode(html: string): ExtractResult {
   const strict = [...html.matchAll(NODE_RE)]
   if (strict.length === 1) {
     const m = strict[0]
-    return { ok: true, json: m[1], start: m.index!, end: m.index! + m[0].length }
+    return { ok: true, json: m[2], openTag: m[1], start: m.index!, end: m.index! + m[0].length }
   }
   if (strict.length > 1) return { ok: false, reason: 'multiple' }
   const loose = [...html.matchAll(NODE_RE_LOOSE)].filter((m) =>
-    /application\/json/i.test(m[0].slice(0, m[0].indexOf('>'))),
+    /application\/json/i.test(m[1]),
   )
   if (loose.length === 1) {
     const m = loose[0]
-    return { ok: true, json: m[1], start: m.index!, end: m.index! + m[0].length }
+    return { ok: true, json: m[2], openTag: m[1], start: m.index!, end: m.index! + m[0].length }
   }
   if (loose.length > 1) return { ok: false, reason: 'multiple' }
   return { ok: false, reason: 'missing' }
@@ -168,9 +169,8 @@ export function replaceDataNode(
 ): { ok: true; html: string } | { ok: false; reason: 'missing' | 'multiple' } {
   const found = findDataNode(html)
   if (!found.ok) return found
-  const openTagEnd = html.indexOf('>', found.start) + 1
-  const openTag = html.slice(found.start, openTagEnd)
-  const next = openTag + serializeNode(node) + '</script>'
+  // 开标签使用匹配到的原文,不做 indexOf 推断(避免属性值含 `>` 的脆弱点)
+  const next = found.openTag + serializeNode(node) + '</script>'
   return { ok: true, html: html.slice(0, found.start) + next + html.slice(found.end) }
 }
 
@@ -216,13 +216,38 @@ export function blankNode(): TripNode {
   }
 }
 
-export function contentEquals(a: TripData, b: TripData): boolean {
-  return JSON.stringify(a) === JSON.stringify(b)
+/** 键序无关的规范化 JSON(草稿/文件内容比对、防键序漂移) */
+export function canonicalJson(v: unknown): string {
+  if (v === null || typeof v !== 'object') return JSON.stringify(v) ?? 'null'
+  if (Array.isArray(v)) return '[' + v.map(canonicalJson).join(',') + ']'
+  const obj = v as Record<string, unknown>
+  return (
+    '{' +
+    Object.keys(obj)
+      .sort()
+      .map((k) => JSON.stringify(k) + ':' + canonicalJson(obj[k]))
+      .join(',') +
+    '}'
+  )
 }
 
+export function contentEquals(a: TripData, b: TripData): boolean {
+  return canonicalJson(a) === canonicalJson(b)
+}
+
+/** 节点内容签名:项目名 + 数据(时间戳不参与,改名/改数据都能检出分歧) */
+export function nodeContentSignature(n: Pick<TripNode, 'project' | 'data'>): string {
+  return canonicalJson({ name: n.project.name, data: n.data })
+}
+
+const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i
+
 export function sanitizeFileName(name: string): string {
+  // 尾随点/空格在 Windows 文件系统上会产生非法或危险文件名(如 "..")
   const clean = name.replace(/[\\/:*?"<>|]/g, '_').trim()
-  return clean.length > 0 ? clean.slice(0, 60) : 'trip'
+  const trimmed = clean.slice(0, 60).replace(/[. ]+$/, '')
+  const base = trimmed.length > 0 ? trimmed : 'trip'
+  return WINDOWS_RESERVED.test(base) ? '_' + base : base
 }
 
 export function deepClone<T>(v: T): T {

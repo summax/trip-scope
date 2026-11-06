@@ -1,4 +1,4 @@
-import { contentEquals, nowIso, type DraftEntry, type TripData, type TripNode } from '../schema'
+import { nodeContentSignature, nowIso, type DraftEntry, type TripNode } from '../schema'
 
 /**
  * 草稿层:localStorage,键 = `tripscope:draft:<project.id>`。
@@ -9,13 +9,18 @@ import { contentEquals, nowIso, type DraftEntry, type TripData, type TripNode } 
 const PREFIX = 'tripscope:draft:'
 const TEST_KEY = 'tripscope:probe'
 
+let probeCache: Storage | null | undefined
+
 function storage(): Storage | null {
+  if (probeCache !== undefined) return probeCache
   try {
     const s = window.localStorage
     s.setItem(TEST_KEY, '1')
     s.removeItem(TEST_KEY)
+    probeCache = s
     return s
   } catch {
+    probeCache = null
     return null
   }
 }
@@ -58,17 +63,16 @@ export function deleteDraft(id: string): void {
 
 /**
  * 打开旅行文件时的草稿裁决:
- * - 草稿数据内容与文件一致 → 视为冗余,静默清除(不误报)
- * - 内容不一致 → 返回草稿交由用户决策(恢复/丢弃),绝不静默覆盖
- * 判定以"数据内容"为准,savedAt/baseUpdatedAt 仅作展示。
+ * - 草稿内容签名(项目名+数据,时间戳不参与)与文件一致 → 冗余,静默清除
+ * - 不一致(包括仅改名)→ 交由用户决策(恢复/丢弃),绝不静默覆盖
  */
 export function resolveDraftOnOpen(
   id: string,
-  fileData: TripData,
+  fileNode: TripNode,
 ): { entry: DraftEntry | null } {
   const d = loadDraft(id)
   if (!d) return { entry: null }
-  if (contentEquals(d.node.data, fileData)) {
+  if (nodeContentSignature(d.node) === nodeContentSignature(fileNode)) {
     deleteDraft(id)
     return { entry: null }
   }
@@ -76,30 +80,20 @@ export function resolveDraftOnOpen(
   return { entry: d }
 }
 
-/** 安全模式(损坏数据)下列出所有候选草稿,不依赖 project.id */
-export function listDrafts(): Array<{
-  id: string
-  name: string
-  savedAt: string
-  schemaVersion: number
-}> {
+/** 读取全部草稿条目(按保存时间倒序) */
+function readAllEntries(): DraftEntry[] {
   const s = storage()
   if (!s) return []
-  const out: Array<{ id: string; name: string; savedAt: string; schemaVersion: number }> = []
+  const out: DraftEntry[] = []
   try {
     for (let i = 0; i < s.length; i++) {
       const k = s.key(i)
       if (!k || !k.startsWith(PREFIX)) continue
       try {
-        const e = JSON.parse(s.getItem(k) || '') as DraftEntry | null
-        if (e && e.node && e.node.project) {
-          out.push({
-            id: e.node.project.id,
-            name: e.node.project.name,
-            savedAt: typeof e.savedAt === 'string' ? e.savedAt : '',
-            schemaVersion: typeof e.node.schemaVersion === 'number' ? e.node.schemaVersion : 0,
-          })
-        }
+        const raw = s.getItem(k)
+        if (!raw) continue
+        const e = JSON.parse(raw) as DraftEntry
+        if (e && e.node && e.node.project) out.push(e)
       } catch {
         /* 单条损坏草稿跳过,不影响其余 */
       }
@@ -108,6 +102,33 @@ export function listDrafts(): Array<{
     /* ignore */
   }
   return out.sort((a, b) => (a.savedAt < b.savedAt ? 1 : -1))
+}
+
+export interface DraftListItem {
+  id: string
+  name: string
+  savedAt: string
+  schemaVersion: number
+  baseUpdatedAt: string | null
+}
+
+/** 安全模式(损坏数据)下列出所有候选草稿,不依赖 project.id */
+export function listDrafts(): DraftListItem[] {
+  return readAllEntries().map((e) => ({
+    id: e.node.project.id,
+    name: e.node.project.name,
+    savedAt: typeof e.savedAt === 'string' ? e.savedAt : '',
+    schemaVersion: typeof e.node.schemaVersion === 'number' ? e.node.schemaVersion : 0,
+    baseUpdatedAt: e.baseUpdatedAt ?? null,
+  }))
+}
+
+/**
+ * 从未落盘的旅行草稿(创建于空白工具、未保存过文件,baseUpdatedAt === null)。
+ * 空白工具重新打开时恢复最近一份,防止刷新/关闭导致未保存内容成为孤儿键。
+ */
+export function listUnsavedDrafts(): DraftEntry[] {
+  return readAllEntries().filter((e) => e.baseUpdatedAt === null)
 }
 
 /* ---------------- 主题持久化(非旅行数据) ---------------- */

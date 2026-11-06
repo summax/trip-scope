@@ -32,9 +32,12 @@ TripScope/
 ```bash
 npm install
 npm run dev        # 开发服务器
-npm run build      # 类型检查 + 单文件构建 → dist/trip-scope.html
-npm run example    # 从产物生成 examples/示例旅行.html
+npm run build      # 类型检查 + 单文件构建 + 重建示例 → dist/trip-scope.html、examples/示例旅行.html
+npm run verify     # 真实 Chrome file:// 端到端验收(67 项断言)
 ```
+
+- `build` 链会**自动重建示例旅行**,保证 examples 产物与源码同代(杜绝"过期示例"问题)
+- `verify` 用 playwright-core 连接本机 Chrome(CDP,自动探测安装路径 + 多端口回退),覆盖双击模式、句柄模式(stub 选择器)、草稿箱、数据安全与 UI 场景;CI 在 windows-latest 上自动运行(`.github/workflows/verify.yml`)
 
 产物为单文件 HTML(<600KB):JS/CSS/图标全部内联,file:// 直接打开,无外链、无 fetch、无 Service Worker。
 
@@ -57,4 +60,4 @@ npm run example    # 从产物生成 examples/示例旅行.html
 
 ## 当前阶段
 
-技术骨架已完成并通过 file:// 端到端验收(37 项断言)。旅行日期、交通/住宿选项、多方案对比、费用汇总等业务功能将在后续阶段实现;移动端存档定位另行讨论。
+技术骨架完成,经外部审查两轮(DeepSeek r1:5 项高优先级;r2:草稿箱、同步异常反馈、恢复不谎报)全部落实后,通过 file:// 端到端验收(**67 项断言**,含失败优先回归)。旅行日期、交通/住宿选项、多方案对比、费用汇总等业务功能将在后续阶段实现;移动端存档定位另行讨论。

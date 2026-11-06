@@ -1,5 +1,7 @@
 node_modules/
 dist/
-dev-fixtures/
+tests/artifacts/
+tests/fixtures/
+tests/.browser-profile/
 *.local
 .DS_Store
