@@ -398,7 +398,20 @@ function unknownHandleName(handle: unknown): string | null {
 export async function save(): Promise<void> {
   if (!canEdit() || !state.node) return
   const node = state.node
+  // 保存互斥:上一笔保存未落定前不重复发起,防并发写盘与状态竞争
+  if (saveInFlight) return
+  saveInFlight = true
+  try {
+    await performSave(node)
+  } finally {
+    saveInFlight = false
+  }
+}
 
+/** 本会话是否有保存正在进行(含句柄写回与嵌入下载) */
+let saveInFlight = false
+
+async function performSave(node: TripNode): Promise<void> {
   if (state.openMode === 'handle') {
     // 迁移写回 = 原地升级磁盘原文件;本次会话首次写回必须经确认(取消后下次保存再次询问)
     if (state.upgradeFromVersion !== null && !upgradeWriteConfirmed) {
@@ -412,9 +425,7 @@ export async function save(): Promise<void> {
     // 升级写回:迁移后的旧文件以当前应用完整快照为底整体替换,不允许「新数据+旧代码」组合落盘
     const r = await saveToHandle(snapshot, { fullAppUpgrade: state.upgradeFromVersion !== null })
     if (r.outcome === 'saved') {
-      node.appVersion = snapshot.appVersion
-      node.rev = snapshot.rev
-      state.fileUpdatedAt = node.updatedAt
+      adoptWriteResult(node, snapshot)
       state.upgradeFromVersion = null
       setToast('已保存到文件')
       return
@@ -427,8 +438,7 @@ export async function save(): Promise<void> {
       // 升级场景的降级副本同样必须携带当前应用代码(preferSnapshot);副本已真实落盘,痕迹采纳回节点
       const d = downloadTripCopy(snapshot, state.upgradeFromVersion !== null)
       if (d.ok) {
-        node.appVersion = snapshot.appVersion
-        node.rev = snapshot.rev
+        adoptWriteResult(node, snapshot)
         setToast('未能写回原文件(' + (r.detail ?? '') + '),已改为下载副本「' + d.fileName + '」')
       } else {
         setToast('未能写回原文件(' + (r.detail ?? '') + '),副本生成失败:' + d.reason + ';请使用「导出 JSON」')
@@ -439,24 +449,43 @@ export async function save(): Promise<void> {
     return
   }
 
-  // 双击模式:保存 = 下载副本,同一旅行延续(保持 id;空白工具首次保存固化真实 UUID)
-  if (node.project.id === BLANK_TOOL_ID) {
-    node.project.id = newId()
-    // 固化后旧空白键即将删除:挂起的排期快照若属该键,一并清除,否则冲刷复活旧内容
-    if (pendingDraft && pendingDraft.node.project.id === BLANK_TOOL_ID) pendingDraft = null
-    deleteDraft(BLANK_TOOL_ID)
-  }
+  // 双击模式:保存 = 下载副本,同一旅行延续。
+  // 空白工具首次保存:成功前不动任何草稿与 ID——副本生成失败时,
+  // 原空白草稿、当前数据、恢复能力全部保留(失败后关闭/崩溃仍可从草稿恢复)。
+  const wasBlank = node.project.id === BLANK_TOOL_ID
   const snapshot = deepClone(node)
+  if (wasBlank) {
+    // 副本文件必须是真实 UUID;工作节点的固化推迟到下载成功之后
+    snapshot.project = { ...snapshot.project, id: newId() }
+  }
   stampNodeForWrite(snapshot)
   const d = downloadTripCopy(snapshot)
   if (d.ok) {
-    node.appVersion = snapshot.appVersion
-    node.rev = snapshot.rev
-    state.fileUpdatedAt = node.updatedAt
+    if (wasBlank) {
+      // 确认落盘后才完成正式 ID 固化与旧草稿清理:
+      // 挂起的排期快照若属旧空白键,一并清除,否则冲刷复活旧内容
+      node.project.id = snapshot.project.id
+      if (pendingDraft && pendingDraft.node.project.id === BLANK_TOOL_ID) pendingDraft = null
+      deleteDraft(BLANK_TOOL_ID)
+    }
+    adoptWriteResult(node, snapshot)
     setToast('已下载副本「' + d.fileName + '」,请从下载位置打开该文件继续编辑')
   } else {
     setToast('副本生成失败:' + d.reason + ';请使用「导出 JSON」')
   }
+}
+
+/**
+ * 写盘成功后的痕迹采纳:只有当前上下文仍是发起保存的那份节点时才动状态,
+ * 用户已切换到别的旅行则旧保存回调不得污染新旅行。
+ * fileUpdatedAt = 实际写盘快照的 updatedAt(保存期间的新编辑 node.updatedAt 已推进,
+ * 不能被误认为已落盘;其草稿基准保持旧磁盘版本)。
+ */
+function adoptWriteResult(node: TripNode, snapshot: TripNode): void {
+  if (state.node !== node) return
+  node.appVersion = snapshot.appVersion
+  node.rev = snapshot.rev
+  state.fileUpdatedAt = snapshot.updatedAt
 }
 
 export async function saveAsCopy(): Promise<void> {

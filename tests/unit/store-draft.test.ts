@@ -2,6 +2,26 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { blankNode, BLANK_TOOL_ID, type TripNode } from '../../src/core/schema'
 import { deleteFromPanel, flushDraft, newTrip, discardDraft, save, setDraftDebounceForTest, state, updateData } from '../../src/core/store'
 import { resolveDraftOnOpen, saveDraft } from '../../src/core/persistence/storage'
+import { downloadTripCopy } from '../../src/core/persistence/archive'
+
+// P1 修复后,嵌入保存走「成功才清理」语义;node 环境无 document,
+// 真 downloadTripCopy 必然 ok:false(无快照源),须显式 mock 成功以测成功路径
+vi.mock('../../src/core/persistence/archive', () => ({
+  adoptHandle: vi.fn(),
+  clearSessionFile: vi.fn(),
+  downloadTripCopy: vi.fn(() => ({ ok: true, fileName: 'x.html' })),
+  getSessionHandle: vi.fn(() => null),
+  openTripViaPicker: vi.fn(),
+  saveAsViaPicker: vi.fn(async () => ({ ok: true, fileName: 'x.html' })),
+  saveToHandle: vi.fn(async () => ({ outcome: 'saved', html: '' })),
+  sessionFileName: vi.fn(() => null),
+  snapshotStatus: vi.fn(() => ({ ok: true, issues: [] })),
+  pickerSupported: vi.fn(() => true),
+}))
+vi.mock('../../src/core/persistence/transfer', () => ({
+  exportJson: vi.fn(() => ({ ok: true, fileName: 'x.json' })),
+  importFromFile: vi.fn(async () => ({ ok: false, reason: 'unused' })),
+}))
 
 const storage = (globalThis as any).__tsStorage as {
   clear(): void
