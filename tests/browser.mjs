@@ -6,14 +6,16 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
+// TS_CHROME_PATH 环境变量优先(CI/非默认安装路径回退),其后是两条默认安装路径
 const CHROME_CANDIDATES = [
+  process.env.TS_CHROME_PATH,
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
   'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
-]
+].filter(Boolean)
 
 /** 启动真实 Chrome(独立临时用户目录),返回 child process */
 export function launchBrowser(port = 9223) {
-  const exe = CHROME_CANDIDATES.find((p) => p.includes('.exe') && fs.existsSync(p))
+  const exe = CHROME_CANDIDATES.find((p) => fs.existsSync(p))
   if (!exe) throw new Error('未找到 chrome.exe,请确认 Chrome 已安装')
   const userDataDir = path.join(HERE, '.browser-profile')
   fs.rmSync(userDataDir, { recursive: true, force: true })

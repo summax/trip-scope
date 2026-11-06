@@ -89,7 +89,12 @@ export type NodeParseResult =
   | { ok: true; node: TripNode }
   | { ok: false; reason: 'corrupted'; detail?: string }
 
-/** 解析数据节点 JSON 文本,做最小结构校验(schemaVersion 整数、project.id 字符串) */
+/**
+ * 解析数据节点 JSON 文本:只校验身份字段(schemaVersion 整数、project.id 字符串),
+ * 原始对象**原样持有**(不投影):未知顶层字段与 project 附加字段全部保留,
+ * 导出往返不丢字段。只对缺失的必需字段补默认值(向后兼容老文件,供下游使用)。
+ * 规范化不在准入发生——写回/迁移时按当前 schema 收口。
+ */
 export function parseNodeJson(jsonText: string): NodeParseResult {
   let raw: unknown
   try {
@@ -106,17 +111,17 @@ export function parseNodeJson(jsonText: string): NodeParseResult {
     return { ok: false, reason: 'corrupted', detail: 'schemaVersion 缺失或非法' }
   }
   const proj = n.project as Record<string, unknown> | undefined
-  if (!proj || typeof proj.id !== 'string' || proj.id.length === 0) {
+  if (!proj || typeof proj !== 'object' || typeof proj.id !== 'string' || proj.id.length === 0) {
     return { ok: false, reason: 'corrupted', detail: 'project.id 缺失或非法' }
   }
-  const node: TripNode = {
-    format: typeof n.format === 'string' ? n.format : '',
-    schemaVersion: sv,
-    project: { id: proj.id, name: typeof proj.name === 'string' ? proj.name : '未命名旅行' },
-    updatedAt: typeof n.updatedAt === 'string' ? n.updatedAt : nowIso(),
-    appVersion: typeof n.appVersion === 'string' ? n.appVersion : '',
-    data: (n.data && typeof n.data === 'object' ? n.data : {}) as TripData,
-  }
+  // 原样持有:未知顶层字段与 project 附加字段全部保留;
+  // 只对缺失的必需字段补默认值,供 UI/签名/序列化等下游使用
+  const node = raw as TripNode
+  if (typeof node.format !== 'string') node.format = '' // 非字符串 format 交由 admission 拒绝
+  if (typeof node.updatedAt !== 'string') node.updatedAt = nowIso()
+  if (typeof node.appVersion !== 'string') node.appVersion = ''
+  if (typeof node.project.name !== 'string') node.project.name = '未命名旅行'
+  if (!node.data || typeof node.data !== 'object') node.data = {}
   return { ok: true, node }
 }
 
@@ -229,10 +234,6 @@ export function canonicalJson(v: unknown): string {
       .join(',') +
     '}'
   )
-}
-
-export function contentEquals(a: TripData, b: TripData): boolean {
-  return canonicalJson(a) === canonicalJson(b)
 }
 
 /** 节点内容签名:项目名 + 数据(时间戳不参与,改名/改数据都能检出分歧) */

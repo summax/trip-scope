@@ -1,5 +1,8 @@
-import { report, url, sleep, DIST, ARTIFACTS } from './common.mjs'
+import { report, url, sleep, DIST, ARTIFACTS, REPO } from './common.mjs'
 import path from 'node:path'
+import fs from 'node:fs'
+
+const PKG = JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8'))
 
 /** S1:file:// 打开 + 快照校验 + 版本显示;S2:草稿延续 */
 export async function run(page) {
@@ -9,7 +12,7 @@ export async function run(page) {
   report('S1a file:// 双击打开,页面加载', (await page.title()).includes('TripScope'), await page.title())
   report('S1b 嵌入模式徽标', (await page.getByText('嵌入模式(保存=下载副本)').count()) === 1)
   report('S1c 快照自校验通过(无受限横幅)', (await page.getByText('副本生成能力受限').count()) === 0)
-  report('S1d 版本显示 v0.1.0', (await page.getByText('TripScope v0.1.0').count()) >= 1)
+  report('S1d 版本显示与 package.json 同步', (await page.getByText(`TripScope v${PKG.version}`).count()) >= 1)
   await page.screenshot({ path: path.join(ARTIFACTS, 's1-light.png') })
 
   // S2 草稿延续

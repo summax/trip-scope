@@ -8,7 +8,14 @@ import { runMigrations } from './migrate'
  * - schemaVersion 低于支持 → 跑迁移链,成功 → normal;失败 → readonly + 原因
  */
 export type Admission =
-  | { ok: true; mode: 'normal' | 'readonly'; node: TripNode; reason?: string }
+  | {
+      ok: true
+      mode: 'normal' | 'readonly'
+      node: TripNode
+      reason?: string
+      /** 迁移前的原版本号;仅当真的跑过迁移链时存在(v2 起才有意义) */
+      migratedFrom?: number
+    }
   | { ok: false; kind: 'corrupted' | 'foreign'; detail?: string }
 
 export function admitNode(jsonText: string): Admission {
@@ -28,6 +35,7 @@ export function admitNode(jsonText: string): Admission {
     }
   }
   if (node.schemaVersion < SUPPORTED_SCHEMA_VERSION) {
+    const fromV = node.schemaVersion
     const m = runMigrations(node)
     if (!m.ok) {
       return {
@@ -37,7 +45,7 @@ export function admitNode(jsonText: string): Admission {
         reason: `迁移失败:${m.error};已进入只读模式`,
       }
     }
-    return { ok: true, mode: 'normal', node: m.node }
+    return { ok: true, mode: 'normal', node: m.node, migratedFrom: fromV }
   }
   return { ok: true, mode: 'normal', node }
 }

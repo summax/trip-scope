@@ -88,31 +88,29 @@ export async function run(page) {
   const rn3Toast = await page.locator('.fixed.bottom-6').textContent().catch(() => '')
   report('RN3 损坏草稿恢复不离开安全模式且不谎报成功', stillSafe >= 1 && !(rn3Toast ?? '').includes('已恢复草稿'), `safe=${stillSafe} toast=${rn3Toast ?? '无'}`)
 
-  /* RN4 删除"当前正在编辑"的草稿不被 pendingDraft 复活(页内 JS 零延迟操作,确保删除发生在 debounce 窗口内) */
+  /* RN4 删除"当前正在编辑"的草稿不被 pendingDraft 复活。
+     设计:先开草稿箱让行渲染,再用**同一个 evaluate**完成"编辑+删除"——
+     两动作间隔是页内 JS 执行耗时(微秒级),必然落在 debounce 窗口内,不依赖 sleep 编时序。
+     判别力已经突变验证:注释掉 store.ts 的 pendingDraft 守卫,本断言变红。 */
   await page.goto(url(DIST))
   await sleep(600)
   await page.getByRole('button', { name: '新建旅行' }).first().click()
   await sleep(300)
   await page.getByPlaceholder(/2027 国庆云南旅行/).fill('RN4当前旅行')
   await sleep(600) // 草稿已落盘,行可见
-  // 同一个 evaluate 链内完成 编辑→开面板→删除,总耗时远小于 300ms
+  await page.getByRole('button', { name: '草稿箱' }).first().click()
+  await sleep(300) // 面板行已渲染
+  // 编辑与删除在同一 evaluate 内完成:间隔为页内 JS 执行耗时,必然 < debounce 窗口
   await page.evaluate(() => {
     const input = document.querySelector('input[placeholder*="可输入任意字符"]')
     input.value = '制造pending的编辑'
     input.dispatchEvent(new Event('input', { bubbles: true }))
-  })
-  await page.evaluate(() => {
-    const btn = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('草稿箱'))
-    btn?.click()
-  })
-  await sleep(150)
-  await page.evaluate(() => {
     const rows = [...document.querySelectorAll('div.rounded-lg.border')]
     const row = rows.find((r) => r.textContent?.includes('RN4当前旅行'))
     const del = [...(row?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.includes('删除'))
     del?.click()
   })
-  await sleep(1200) // 越过 debounce 时刻,观察是否被排期快照复活
+  await sleep(1500) // 越过 debounce 时刻,观察是否被排期快照复活
   const rn4Resurrect = await page.evaluate(() => {
     const hits = []
     for (let i = 0; i < localStorage.length; i++) {

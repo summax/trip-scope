@@ -1,6 +1,7 @@
 import { reactive } from 'vue'
 import {
   BLANK_TOOL_ID,
+  SUPPORTED_SCHEMA_VERSION,
   blankNode,
   deepClone,
   extractDataNode,
@@ -71,6 +72,9 @@ export interface State {
   snapshotIssues: string[]
   pickerSupported: boolean
   appVersion: string
+  /** 句柄模式下,本次会话首次写回将把磁盘原文件从 v{N} 原地升级;非 null 时保存前需确认 */
+  upgradeFromVersion: number | null
+  upgradeConfirmOpen: boolean
 }
 
 export const state = reactive<State>({
@@ -93,11 +97,22 @@ export const state = reactive<State>({
   snapshotIssues: [],
   pickerSupported: false,
   appVersion: __APP_VERSION__,
+  upgradeFromVersion: null,
+  upgradeConfirmOpen: false,
 })
 
 /* toast 自动消失定时器 */
 let toastTimer: ReturnType<typeof setTimeout> | null = null
 let draftTimer: ReturnType<typeof setTimeout> | null = null
+
+/** 草稿防抖窗口(ms):测试可注入,生产默认 300ms */
+let draftDebounceMs = 300
+export function setDraftDebounceForTest(ms: number): void {
+  draftDebounceMs = ms
+}
+
+/** 升级写回确认标记:同一上下文内确认过一次即可,上下文切换即重置 */
+let upgradeWriteConfirmed = false
 
 /* ------------------------------------------------------------------ */
 /* 主题                                                                 */
@@ -127,6 +142,8 @@ interface OpenContext {
   readonly?: boolean
   readonlyReason?: string
   skipDraftCheck?: boolean
+  /** 准入跑过迁移链时的迁移前版本号(仅 handle 模式参与升级确认裁决) */
+  migratedFrom?: number
 }
 
 function openTrip(
@@ -146,6 +163,16 @@ function openTrip(
   state.storageError = null
   state.conflictFreshRaw = null
   state.safeDrafts = []
+  state.upgradeFromVersion = null
+  upgradeWriteConfirmed = false
+  if (
+    opts.openMode === 'handle' &&
+    typeof opts.migratedFrom === 'number' &&
+    opts.migratedFrom < SUPPORTED_SCHEMA_VERSION
+  ) {
+    // 本次会话的首次写回会把磁盘原文件从 v{N} 原地升级;首次「保存到文件」前必须经确认
+    state.upgradeFromVersion = opts.migratedFrom
+  }
 
   if (!state.readonly && !opts.skipDraftCheck) {
     const r = resolveDraftOnOpen(node.project.id, node)
@@ -188,6 +215,7 @@ export function openFromJson(
     readonly: adm.mode === 'readonly',
     readonlyReason: adm.reason ?? '',
     skipDraftCheck: opts?.skipDraftCheck,
+    migratedFrom: adm.migratedFrom,
   })
   return { opened: true }
 }
@@ -253,7 +281,7 @@ function scheduleDraft(): void {
   if (state.readonly || !state.node) return
   pendingDraft = { node: deepClone(state.node), base: state.fileUpdatedAt }
   if (draftTimer) clearTimeout(draftTimer)
-  draftTimer = setTimeout(flushDraft, 300)
+  draftTimer = setTimeout(flushDraft, draftDebounceMs)
 }
 
 /** 立即把排期中的草稿写入存储(上下文切换前 / beforeunload 时调用) */
@@ -337,11 +365,19 @@ export async function openHandleFile(): Promise<void> {
 export async function save(): Promise<void> {
   if (!canEdit() || !state.node) return
   const node = state.node
+  // 落盘痕迹必须准:写出文件的 appVersion 一律是当前应用版本
+  node.appVersion = __APP_VERSION__
 
   if (state.openMode === 'handle') {
+    // 迁移写回 = 原地升级磁盘原文件;本次会话首次写回必须经确认(取消后下次保存再次询问)
+    if (state.upgradeFromVersion !== null && !upgradeWriteConfirmed) {
+      state.upgradeConfirmOpen = true
+      return
+    }
     const r = await saveToHandle(node)
     if (r.outcome === 'saved') {
       state.fileUpdatedAt = node.updatedAt
+      state.upgradeFromVersion = null
       setToast('已保存到文件')
       return
     }
@@ -379,6 +415,7 @@ export async function save(): Promise<void> {
 export async function saveAsCopy(): Promise<void> {
   if (!canEdit() || !state.node) return
   const clone = deepClone(state.node)
+  clone.appVersion = __APP_VERSION__
   clone.project = { id: newId(), name: state.node.project.name + ' 副本' }
   const r = await saveAsViaPicker(clone)
   if (r.ok) {
@@ -413,6 +450,28 @@ export async function importFile(file: File): Promise<void> {
   clearSessionFile()
   openFromJson(serializeNode(r.node), 'embedded')
   setToast('导入成功')
+}
+
+/* ------------------------------------------------------------------ */
+/* 迁移写回升级确认                                                      */
+/* ------------------------------------------------------------------ */
+
+/** 确认升级写回:本次会话内不再重复询问 */
+export function confirmUpgradeWrite(): void {
+  state.upgradeConfirmOpen = false
+  upgradeWriteConfirmed = true
+  void save()
+}
+
+/** 取消:弹层关闭,下次保存仍会询问 */
+export function cancelUpgradeWrite(): void {
+  state.upgradeConfirmOpen = false
+}
+
+/** 弹层内改走「另存为副本」:原文件保持 v{N} 原样,弹层关闭 */
+export function upgradeCopyInstead(): void {
+  state.upgradeConfirmOpen = false
+  void saveAsCopy()
 }
 
 /* ------------------------------------------------------------------ */

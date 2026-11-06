@@ -8,6 +8,7 @@
     "build": "vue-tsc --noEmit && vite build && node scripts/rename.mjs && node scripts/build-example.mjs",
     "example": "node scripts/build-example.mjs",
     "verify": "node tests/verify.mjs",
+    "test:unit": "vitest run",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -22,6 +23,7 @@
     "typescript": "^6.0.3",
     "vite": "^8.3.6",
     "vite-plugin-singlefile": "^2.3.4",
+    "vitest": "^5.1.0",
     "vue-tsc": "^3.3.14"
   }
 }
