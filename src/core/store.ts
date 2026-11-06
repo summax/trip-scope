@@ -337,7 +337,10 @@ export function restoreDraft(): void {
 
 export function discardDraft(): void {
   if (!state.draftBanner || !state.node) return
-  deleteDraft(state.draftBanner.entry.node.project.id)
+  // 丢弃声明「文件版本为准」:挂起的排期快照属同键时一并清除,否则 300ms 后复活
+  const bannerId = state.draftBanner.entry.node.project.id
+  if (pendingDraft && pendingDraft.node.project.id === bannerId) pendingDraft = null
+  deleteDraft(bannerId)
   state.draftBanner = null
   setToast('已丢弃草稿')
 }
@@ -347,6 +350,8 @@ export function discardDraft(): void {
 /* ------------------------------------------------------------------ */
 
 export function newTrip(): void {
+  // 待冲刷的排期快照属于即将删除的空白键时一并清除,否则 openTrip 的冲刷会把旧编辑复活到该键
+  if (pendingDraft && pendingDraft.node.project.id === BLANK_TOOL_ID) pendingDraft = null
   deleteDraft(BLANK_TOOL_ID)
   const n = blankNode()
   n.project = { id: newId(), name: '未命名旅行' }
@@ -401,7 +406,8 @@ export async function save(): Promise<void> {
       state.upgradeConfirmOpen = true
       return
     }
-    const r = await saveToHandle(node)
+    // 升级写回:迁移后的旧文件以当前应用完整快照为底整体替换,不允许「新数据+旧代码」组合落盘
+    const r = await saveToHandle(node, { fullAppUpgrade: state.upgradeFromVersion !== null })
     if (r.outcome === 'saved') {
       state.fileUpdatedAt = node.updatedAt
       state.upgradeFromVersion = null
@@ -413,7 +419,8 @@ export async function save(): Promise<void> {
       return
     }
     if (r.outcome === 'downgraded') {
-      const d = downloadTripCopy(node)
+      // 升级场景的降级副本同样必须携带当前应用代码(preferSnapshot)
+      const d = downloadTripCopy(node, state.upgradeFromVersion !== null)
       if (d.ok) {
         setToast('未能写回原文件(' + (r.detail ?? '') + '),已改为下载副本「' + d.fileName + '」')
       } else {
@@ -428,6 +435,8 @@ export async function save(): Promise<void> {
   // 双击模式:保存 = 下载副本,同一旅行延续(保持 id;空白工具首次保存固化真实 UUID)
   if (node.project.id === BLANK_TOOL_ID) {
     node.project.id = newId()
+    // 固化后旧空白键即将删除:挂起的排期快照若属该键,一并清除,否则冲刷复活旧内容
+    if (pendingDraft && pendingDraft.node.project.id === BLANK_TOOL_ID) pendingDraft = null
     deleteDraft(BLANK_TOOL_ID)
   }
   const d = downloadTripCopy(node)
@@ -444,14 +453,16 @@ export async function saveAsCopy(): Promise<void> {
   const clone = deepClone(state.node)
   clone.appVersion = __APP_VERSION__
   clone.project = { id: newId(), name: state.node.project.name + ' 副本' }
-  const r = await saveAsViaPicker(clone)
+  // 迁移升级场景的副本必须是完整新版本(应用代码 + 数据),不许旧代码进副本
+  const preferSnapshot = state.upgradeFromVersion !== null
+  const r = await saveAsViaPicker(clone, preferSnapshot)
   if (r.ok) {
     setToast('副本已另存为「' + r.fileName + '」(新 UUID,与原旅行草稿互不干扰)')
     return
   }
   if (r.reason === 'cancelled') return
   if (r.reason === 'unsupported') {
-    const d = downloadTripCopy(clone)
+    const d = downloadTripCopy(clone, preferSnapshot)
     if (d.ok) {
       setToast('当前浏览器不支持另存选择器,已改为下载副本「' + d.fileName + '」')
     } else {

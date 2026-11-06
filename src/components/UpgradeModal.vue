@@ -9,10 +9,11 @@ import { SUPPORTED_SCHEMA_VERSION } from '../core/schema'
     class="fixed inset-0 z-30 grid place-items-center bg-black/45 px-4"
   >
     <div class="w-full max-w-md card">
-      <div class="text-base font-medium">本次保存将升级原文件的数据版本</div>
+      <div class="text-base font-medium">本次保存将整体升级原文件</div>
       <p class="mt-2 text-sm text-muted">
         原文件是 v{{ state.upgradeFromVersion }},当前应用支持 v{{ SUPPORTED_SCHEMA_VERSION }}。
-        「保存到文件」会原地改写磁盘上的原文件,把数据升级到当前版本。
+        「保存到文件」会用当前版本应用<b>完整替换</b>磁盘上的原文件——应用代码与数据一并升级,
+        而不是仅在旧文件里替换数据。
       </p>
       <ul class="mt-2 list-disc pl-5 text-sm text-muted">
         <li>升级后,旧版本应用打开此文件只能只读查看(仍可导出 JSON)</li>

@@ -1,12 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import {
-  deleteFromPanel,
-  flushDraft,
-  setDraftDebounceForTest,
-  state,
-  updateData,
-} from '../../src/core/store'
-import { blankNode, type TripNode } from '../../src/core/schema'
+import { blankNode, BLANK_TOOL_ID, type TripNode } from '../../src/core/schema'
+import { deleteFromPanel, flushDraft, newTrip, discardDraft, save, setDraftDebounceForTest, state, updateData } from '../../src/core/store'
 import { resolveDraftOnOpen, saveDraft } from '../../src/core/persistence/storage'
 
 const storage = (globalThis as any).__tsStorage as {
@@ -111,5 +105,47 @@ describe('resolveDraftOnOpen 裁决', () => {
     saveDraft(draftNode, '2026-01-01T00:00:00.000Z')
     const r = resolveDraftOnOpen('id-sig2', fileNode)
     expect(r.entry?.node.project.name).toBe('草稿版')
+  })
+})
+
+describe('删除键与挂起排期的竞态(确定性,fake timers,不依赖 sleep)', () => {
+  test('newTrip 不复活旧空白草稿', () => {
+    state.node = trip(BLANK_TOOL_ID, '旧空白')
+    updateData((d) => {
+      if (!d.demo) d.demo = {}
+      d.demo.note = '旧空白编辑'
+    })
+    newTrip()
+    vi.advanceTimersByTime(500)
+    expect(storage.has('tripscope:draft:' + BLANK_TOOL_ID)).toBe(false)
+  })
+
+  test('空白工具首次保存固化 UUID 时清排期,旧空白键不复活', async () => {
+    state.node = trip(BLANK_TOOL_ID, '待固化空白')
+    state.openMode = 'embedded'
+    updateData((d) => {
+      if (!d.demo) d.demo = {}
+      d.demo.note = '固化前编辑'
+    })
+    await save()
+    vi.advanceTimersByTime(500)
+    expect(storage.has('tripscope:draft:' + BLANK_TOOL_ID)).toBe(false)
+  })
+
+  test('丢弃横幅草稿时清排期,同键内容不复活', () => {
+    state.node = trip('id-dd', '丢弃场景')
+    state.fileUpdatedAt = '2026-01-01T00:00:00.000Z'
+    state.draftBanner = {
+      entry: { node: trip('id-dd', '横幅版'), savedAt: 'x', baseUpdatedAt: null },
+      basedOnCurrent: false,
+    }
+    updateData((d) => {
+      if (!d.demo) d.demo = {}
+      d.demo.note = '丢弃前编辑'
+    })
+    discardDraft()
+    vi.advanceTimersByTime(500)
+    expect(storage.has('tripscope:draft:id-dd')).toBe(false)
+    expect(state.draftBanner).toBeNull()
   })
 })

@@ -126,6 +126,12 @@ describe('findDataNode / replaceDataNode:严格边界', () => {
     expect(!r.ok && r.reason === 'multiple').toBe(true)
   })
 
+  test('严格形态 + 宽容形态并存 → multiple(统一统计,不漏检)', () => {
+    const html = page(good) + page(good, `<script TYPE='Application/JSON' id='app-data'>`)
+    const r = findDataNode(html)
+    expect(!r.ok && r.reason === 'multiple').toBe(true)
+  })
+
   test('缺失拒绝且原因为 missing', () => {
     const r = findDataNode('<html><body>没有节点</body></html>')
     expect(!r.ok && r.reason === 'missing').toBe(true)
@@ -251,5 +257,15 @@ describe('validateSnapshotHtml', () => {
   test('数据节点缺失记为问题', () => {
     const html = `<!DOCTYPE html><html><head><style>a{}</style></head><body><script>${MARK}</script></body></html>`
     expect(!validateSnapshotHtml(html, MARK).ok).toBe(true)
+  })
+
+  test('闭合的外链 script 被识别(先剔块再查会漏)', () => {
+    const html =
+      `<!DOCTYPE html><html><head><style>a{}</style></head><body>` +
+      `<script id="app-data" type="application/json">{}</script>` +
+      `<script>${MARK}</script>` +
+      `<script src="https://cdn.example.com/x.js"></script></body></html>`
+    const v = validateSnapshotHtml(html, MARK)
+    expect(!v.ok && v.issues.some((i) => i.includes('外链'))).toBe(true)
   })
 })

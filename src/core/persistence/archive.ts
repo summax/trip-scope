@@ -94,8 +94,36 @@ async function ensureWritePermission(handle: any): Promise<boolean> {
   }
 }
 
-/** 句柄模式保存:尽力检测外部修改 → 精确替换数据节点 → 写回原文件 */
-export async function saveToHandle(node: TripNode): Promise<SaveOutcome> {
+/** 写回底稿裁决结果 */
+export type WriteBase =
+  | { ok: true; base: string; kind: 'data-only' | 'full-app' }
+  | { ok: false; reason: string }
+
+/**
+ * 写回底稿裁决:
+ * - 普通数据写回:以磁盘原文为底,仅替换数据节点(保留原文其余部分,by design)
+ * - 应用升级写回:迁移后的旧文件不允许「新数据 + 旧应用代码」组合落盘,
+ *   必须以当前应用完整快照为底整体替换;快照不可用时明确拒绝,不做降级伪装
+ */
+export function resolveWriteBase(
+  freshRaw: string,
+  fullAppUpgrade: boolean,
+  snapshot: string | null,
+  snapshotOk: boolean,
+  snapshotIssues: string[],
+): WriteBase {
+  if (!fullAppUpgrade) return { ok: true, base: freshRaw, kind: 'data-only' }
+  if (!snapshotOk || !snapshot) {
+    return { ok: false, reason: snapshotIssues.join(';') || '当前应用快照校验失败' }
+  }
+  return { ok: true, base: snapshot, kind: 'full-app' }
+}
+
+/** 句柄模式保存:尽力检测外部修改 → 底稿裁决 → 精确替换数据节点 → 写回原文件 */
+export async function saveToHandle(
+  node: TripNode,
+  opts?: { fullAppUpgrade?: boolean },
+): Promise<SaveOutcome> {
   const handle = session.handle as any
   if (!handle) return { outcome: 'error', detail: '无文件句柄' }
 
@@ -111,19 +139,35 @@ export async function saveToHandle(node: TripNode): Promise<SaveOutcome> {
     return { outcome: 'downgraded', detail: '无法读取文件当前内容' }
   }
 
-  // 外部修改检测为尽力检测:重读磁盘内容与会话开始时的原文比对
+  // 外部修改检测为尽力检测:重读磁盘内容与会话开始时的原文比对(升级替换会整体覆盖,检测更必要)
   if (freshRaw !== session.originalRaw) {
     return { outcome: 'conflict', freshRaw }
   }
 
-  const r = replaceDataNode(freshRaw, node)
+  // 底稿裁决:普通写回=磁盘原文;升级写回=当前应用完整快照(应用代码与数据一并升级)
+  const wb = resolveWriteBase(
+    freshRaw,
+    opts?.fullAppUpgrade === true,
+    session.snapshot,
+    session.snapshotOk,
+    session.snapshotIssues,
+  )
+  if (!wb.ok) {
+    return {
+      outcome: 'error',
+      detail: '应用升级写回被拒绝(' + wb.reason + ');请改用「另存为副本」或「导出 JSON」',
+    }
+  }
+
+  const r = replaceDataNode(wb.base, node)
   if (!r.ok) {
     return {
       outcome: 'downgraded',
       detail:
-        r.reason === 'multiple'
-          ? '原文件数据节点不唯一,拒绝写入'
-          : '原文件缺少数据节点,拒绝写入',
+        (wb.kind === 'full-app' ? '应用快照' : '原文件') +
+        (r.reason === 'multiple'
+          ? '数据节点不唯一,拒绝写入'
+          : '缺少数据节点,拒绝写入'),
     }
   }
 
@@ -176,9 +220,15 @@ export function getSessionHandle(): unknown | null {
   return session.handle
 }
 
-/** 副本内容来源优先级:句柄磁盘原文 → 校验通过的快照;两者皆不可用则失败 */
-function buildCopyHtml(node: TripNode): { ok: true; html: string } | { ok: false; reason: string } {
-  if (session.originalRaw) {
+/**
+ * 副本内容来源优先级:
+ * - 默认:句柄磁盘原文 → 校验通过的快照
+ * - preferSnapshot(应用升级场景):跳过磁盘原文,直接用快照——
+ *   避免「新数据 + 旧应用代码」的副本落盘
+ * 两者皆不可用则失败
+ */
+function buildCopyHtml(node: TripNode, preferSnapshot = false): { ok: true; html: string } | { ok: false; reason: string } {
+  if (!preferSnapshot && session.originalRaw) {
     const r = replaceDataNode(session.originalRaw, node)
     if (r.ok) return { ok: true, html: r.html }
   }
@@ -204,8 +254,9 @@ export function triggerDownload(content: string, fileName: string, mime: string)
 
 export function downloadTripCopy(
   node: TripNode,
+  preferSnapshot = false,
 ): { ok: true; fileName: string } | { ok: false; reason: string } {
-  const r = buildCopyHtml(node)
+  const r = buildCopyHtml(node, preferSnapshot)
   if (!r.ok) return r
   const fileName = sanitizeFileName(node.project.name) + '.html'
   triggerDownload(r.html, fileName, 'text/html;charset=utf-8')
@@ -217,9 +268,9 @@ export type SaveAsResult =
   | { ok: false; reason: 'unsupported' | 'cancelled' | 'error'; detail?: string }
 
 /** 另存为副本:showSaveFilePicker 落盘(仍属副本,不写回原文件) */
-export async function saveAsViaPicker(node: TripNode): Promise<SaveAsResult> {
+export async function saveAsViaPicker(node: TripNode, preferSnapshot = false): Promise<SaveAsResult> {
   if (!pickerSupported()) return { ok: false, reason: 'unsupported' }
-  const r = buildCopyHtml(node)
+  const r = buildCopyHtml(node, preferSnapshot)
   if (!r.ok) return { ok: false, reason: 'error', detail: r.reason }
   try {
     const handle = await (window as any).showSaveFilePicker({

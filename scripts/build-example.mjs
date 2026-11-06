@@ -5,7 +5,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
  * 注意:节点读写逻辑与 src/core/schema.ts 保持一致(严格边界、`<` 转义)。
  */
 
-// 与 src/core/schema.ts 的 NODE_RE 保持同构:`[/]` 字符类防自匹配,分组 1=开标签,2=数据
+// 与 src/core/schema.ts 的数据节点正则(NODE_RE_LOOSE)保持同构:分组 1=开标签,2=数据
 const RE = /(<script id="app-data" type="application[/]json">)([\s\S]*?)<\/script>/g
 
 const html = readFileSync(new URL('../dist/trip-scope.html', import.meta.url), 'utf8')

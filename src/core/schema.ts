@@ -42,6 +42,7 @@ export interface TripNode {
   schemaVersion: number
   project: ProjectMeta
   updatedAt: string
+  /** 最后一次写出这份数据的应用版本;不描述文件内嵌应用代码的版本 */
   appVersion: string
   data: TripData
 }
@@ -129,10 +130,10 @@ export function parseNodeJson(jsonText: string): NodeParseResult {
 /* 数据节点定位与替换:严格边界,命中数必须为 1                          */
 /* ------------------------------------------------------------------ */
 
-// `[/]` 字符类写法:模式源码文本不再匹配自身,免受压缩器改写影响
-// `[/]` 字符类写法:模式源码文本不再匹配自身,免受压缩器改写影响;分组 1=开标签,2=数据
-const NODE_RE = /(<script id="app-data" type="application[/]json">)([\s\S]*?)<\/script>/g
-// 属性顺序宽容版(仍要求开标签内含 application/json),命中数同样必须为 1
+// 属性顺序/大小写宽容版:数据节点身份 = id 为 app-data 且 type 含 application/json。
+// 它是严格形态的超集,统一统计即全集——「严格命中 1 就返回」会漏掉
+// 「1 严格 + 1 宽容」并存的多节点文件,造成替换后残留第二个数据节点。
+// 模式自身不会自匹配 dist 内嵌源码:\bid 的词边界断言在 bid 连写文本上恒失败。
 const NODE_RE_LOOSE = /(<script\b[^>]*\bid=["']app-data["'][^>]*>)([\s\S]*?)<\/script>/gi
 
 export type ExtractResult =
@@ -140,20 +141,14 @@ export type ExtractResult =
   | { ok: false; reason: 'missing' | 'multiple' }
 
 export function findDataNode(html: string): ExtractResult {
-  const strict = [...html.matchAll(NODE_RE)]
-  if (strict.length === 1) {
-    const m = strict[0]
-    return { ok: true, json: m[2], openTag: m[1], start: m.index!, end: m.index! + m[0].length }
-  }
-  if (strict.length > 1) return { ok: false, reason: 'multiple' }
-  const loose = [...html.matchAll(NODE_RE_LOOSE)].filter((m) =>
+  const candidates = [...html.matchAll(NODE_RE_LOOSE)].filter((m) =>
     /application\/json/i.test(m[1]),
   )
-  if (loose.length === 1) {
-    const m = loose[0]
+  if (candidates.length === 1) {
+    const m = candidates[0]
     return { ok: true, json: m[2], openTag: m[1], start: m.index!, end: m.index! + m[0].length }
   }
-  if (loose.length > 1) return { ok: false, reason: 'multiple' }
+  if (candidates.length > 1) return { ok: false, reason: 'multiple' }
   return { ok: false, reason: 'missing' }
 }
 
@@ -201,7 +196,9 @@ export function validateSnapshotHtml(html: string, appMarker: string): SnapshotV
     .replace(/<script\b[\s\S]*?<\/script>/gi, ' ')
     .replace(/<style\b[\s\S]*?<\/style>/gi, ' ')
 
-  if (/<script\b[^>]*\bsrc\s*=/i.test(markupOnly)) issues.push('存在外链脚本')
+  // 全部 script 开标签统一检查:先剔块再查 src 会漏掉闭合的外链 script 块
+  const scriptOpenTags = [...html.matchAll(/<script\b[^>]*>/gi)].map((m) => m[0])
+  if (scriptOpenTags.some((t) => /\bsrc\s*=/i.test(t))) issues.push('存在外链脚本')
   const badLinks = [...markupOnly.matchAll(/<link\b[^>]*>/gi)].filter(
     (m) => !/href\s*=\s*["']?data:/i.test(m[0]),
   )
