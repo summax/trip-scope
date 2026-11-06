@@ -38,6 +38,19 @@ const session: Session = {
   snapshotIssues: [],
 }
 
+/**
+ * 文件会话世代号:adoptHandle / clearSessionFile 每次变更绑定关系时自增。
+ * 异步写回在发起时记下世代,写盘完成时若世代已变(用户中途打开了别的文件),
+ * 本次结果作废——不得把写盘内容记到新文件的会话账上,session.originalRaw
+ * 也不得被旧保存任务覆盖(隔离不只在 store 层,archive 层自守)。
+ */
+let sessionGeneration = 0
+
+/** 发起写回前取当前世代 */
+export function currentSessionGeneration(): number {
+  return sessionGeneration
+}
+
 export function captureSnapshot(): void {
   // 模块脚本在文档解析完成后执行:此时 DOM 完整、Vue 未挂载,快照即"解析完成、挂载之前"
   const snap = DOCTYPE + document.documentElement.outerHTML
@@ -126,6 +139,8 @@ export async function saveToHandle(
 ): Promise<SaveOutcome> {
   const handle = session.handle as any
   if (!handle) return { outcome: 'error', detail: '无文件句柄' }
+  // 发起时的会话世代:写盘完成时核对,中途换绑文件则本次作废
+  const gen = sessionGeneration
 
   if (!(await ensureWritePermission(handle))) {
     return { outcome: 'downgraded', detail: '未获得文件写权限' }
@@ -182,11 +197,16 @@ export async function saveToHandle(
     }
   }
 
+  // 写盘完成时核对世代:中途用户已打开别的文件,本次写盘内容不得记入新文件会话
+  if (sessionGeneration !== gen) {
+    return { outcome: 'error', detail: '保存期间文件会话已切换,本次写盘结果已废弃' }
+  }
   session.originalRaw = r.html
   return { outcome: 'saved', html: r.html }
 }
 
 export function adoptHandle(html: string, handle: unknown): void {
+  sessionGeneration++
   session.handle = handle
   session.originalRaw = html
   persistLastHandle(handle)
@@ -211,6 +231,7 @@ function persistLastHandle(handle: unknown): void {
 }
 
 export function clearSessionFile(): void {
+  sessionGeneration++
   session.handle = null
   session.originalRaw = null
 }

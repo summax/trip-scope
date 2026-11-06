@@ -6,6 +6,7 @@ import {
   deepClone,
   extractDataNode,
   newId,
+  nodeContentSignature,
   nowIso,
   serializeNode,
   stampNodeForWrite,
@@ -239,6 +240,15 @@ export function openFromJson(
     migratedFrom: adm.migratedFrom,
     fileName: opts?.fileName,
   })
+  // P1-2 下载≠落盘的回收路径:打开的文件与旧空白草稿内容一致(签名相等)
+  // → 下载文件已确认可用,冗余恢复数据此时才可清理;不一致则草稿继续保留,
+  // 由草稿横幅走正常裁决(绝不静默覆盖)
+  if (opts?.skipDraftCheck !== true) {
+    const stale = loadDraft(BLANK_TOOL_ID)
+    if (stale && nodeContentSignature(stale.node) === nodeContentSignature(adm.node)) {
+      deleteDraft(BLANK_TOOL_ID)
+    }
+  }
   return { opened: true }
 }
 
@@ -315,7 +325,20 @@ export function flushDraft(): void {
   if (!pendingDraft) return
   const p = pendingDraft
   pendingDraft = null
-  const r = saveDraft(p.node, p.base)
+  // 冲刷时的基准修正:排期发生在保存完成前,其 base 是排期时的磁盘版本;
+  // 若此后磁盘已推进(保存成功,fileUpdatedAt=快照版本)且编辑内容晚于旧基准,
+  // 草稿实际基于的是新磁盘版本——以冲刷时刻的真实磁盘版本为准。
+  // 失败/冲突路径 fileUpdatedAt 不变,这里自然保持旧基准(P2-1 要求 2)。
+  let base = p.base
+  if (
+    state.node === p.node &&
+    state.fileUpdatedAt !== null &&
+    base !== state.fileUpdatedAt &&
+    p.node.updatedAt > (base ?? '')
+  ) {
+    base = state.fileUpdatedAt
+  }
+  const r = saveDraft(p.node, base)
   if (!r.ok) {
     state.storageError =
       '本地草稿保存失败(' + r.error + '),请尽快使用「保存」或「导出 JSON」'
@@ -401,8 +424,11 @@ export async function save(): Promise<void> {
   // 保存互斥:上一笔保存未落定前不重复发起,防并发写盘与状态竞争
   if (saveInFlight) return
   saveInFlight = true
+  // 本次保存的全局令牌:await 返回后所有全局状态写入(Toast/冲突/升级标记)
+  // 都核对自己发起时的令牌,旧保存回调不得污染用户已切换到的新旅行
+  const seq = ++saveSeq
   try {
-    await performSave(node)
+    await performSave(node, seq)
   } finally {
     saveInFlight = false
   }
@@ -410,8 +436,15 @@ export async function save(): Promise<void> {
 
 /** 本会话是否有保存正在进行(含句柄写回与嵌入下载) */
 let saveInFlight = false
+/** 保存令牌自增:每笔保存唯一,异步完成后核对身份 */
+let saveSeq = 0
 
-async function performSave(node: TripNode): Promise<void> {
+/** 仅当仍是同一笔保存的上下文时才允许写全局状态 */
+function isCurrentSave(seq: number): boolean {
+  return seq === saveSeq
+}
+
+async function performSave(node: TripNode, seq: number): Promise<void> {
   if (state.openMode === 'handle') {
     // 迁移写回 = 原地升级磁盘原文件;本次会话首次写回必须经确认(取消后下次保存再次询问)
     if (state.upgradeFromVersion !== null && !upgradeWriteConfirmed) {
@@ -426,12 +459,15 @@ async function performSave(node: TripNode): Promise<void> {
     const r = await saveToHandle(snapshot, { fullAppUpgrade: state.upgradeFromVersion !== null })
     if (r.outcome === 'saved') {
       adoptWriteResult(node, snapshot)
-      state.upgradeFromVersion = null
-      setToast('已保存到文件')
+      // 升级标记只属于发起保存的旅行:上下文已切换则新旅行的确认状态不得被清
+      if (state.node === node) state.upgradeFromVersion = null
+      rebaselinePendingDraft(node, snapshot, seq)
+      if (state.node === node) setToast('已保存到文件')
       return
     }
     if (r.outcome === 'conflict') {
-      state.conflictFreshRaw = r.freshRaw
+      // 冲突快照只属于发起保存的旅行,不得覆盖新旅行的冲突状态
+      if (state.node === node) state.conflictFreshRaw = r.freshRaw
       return
     }
     if (r.outcome === 'downgraded') {
@@ -439,39 +475,71 @@ async function performSave(node: TripNode): Promise<void> {
       const d = downloadTripCopy(snapshot, state.upgradeFromVersion !== null)
       if (d.ok) {
         adoptWriteResult(node, snapshot)
-        setToast('未能写回原文件(' + (r.detail ?? '') + '),已改为下载副本「' + d.fileName + '」')
-      } else {
+        rebaselinePendingDraft(node, snapshot, seq)
+        if (state.node === node) {
+          setToast('未能写回原文件(' + (r.detail ?? '') + '),已改为下载副本「' + d.fileName + '」')
+        }
+      } else if (state.node === node) {
         setToast('未能写回原文件(' + (r.detail ?? '') + '),副本生成失败:' + d.reason + ';请使用「导出 JSON」')
       }
       return
     }
-    setToast('保存失败:' + r.detail)
+    if (state.node === node) setToast('保存失败:' + r.detail)
     return
   }
 
   // 双击模式:保存 = 下载副本,同一旅行延续。
-  // 空白工具首次保存:成功前不动任何草稿与 ID——副本生成失败时,
-  // 原空白草稿、当前数据、恢复能力全部保留(失败后关闭/崩溃仍可从草稿恢复)。
+  // 空白工具首次保存:下载发起 ≠ 可靠落盘(浏览器可能拦截/取消/失败),
+  // 旧空白草稿是唯一的本地恢复数据——保留到「确认打开有效文件」时才清理。
   const wasBlank = node.project.id === BLANK_TOOL_ID
   const snapshot = deepClone(node)
   if (wasBlank) {
-    // 副本文件必须是真实 UUID;工作节点的固化推迟到下载成功之后
+    // 副本文件必须是真实 UUID;工作节点的固化推迟到「确认打开」之后
     snapshot.project = { ...snapshot.project, id: newId() }
   }
   stampNodeForWrite(snapshot)
   const d = downloadTripCopy(snapshot)
   if (d.ok) {
     if (wasBlank) {
-      // 确认落盘后才完成正式 ID 固化与旧草稿清理:
-      // 挂起的排期快照若属旧空白键,一并清除,否则冲刷复活旧内容
+      // 工作节点沿用副本文件的真实 UUID(与磁盘文件一致,后续保存/草稿键对齐)。
+      // 下载发起 ≠ 可靠落盘(浏览器可能拦截/取消/失败):恢复数据不能丢——
+      // 把旧空白键草稿**原样迁移**到新 UUID 键(不判断新旧:确认打开前,
+      // 下载文件是否真实存在不可知,草稿是唯一本地恢复数据);
+      // 之后用户打开下载文件且内容一致时,由 openFromJson 的签名比对清理冗余。
+      const staleBlank = loadDraft(BLANK_TOOL_ID)
       node.project.id = snapshot.project.id
-      if (pendingDraft && pendingDraft.node.project.id === BLANK_TOOL_ID) pendingDraft = null
+      if (staleBlank) {
+        const carried = staleBlank.node
+        carried.project = { ...carried.project, id: snapshot.project.id }
+        saveDraft(carried, staleBlank.baseUpdatedAt)
+      }
+      if (pendingDraft && pendingDraft.node.project.id === BLANK_TOOL_ID) {
+        pendingDraft.node.project.id = snapshot.project.id
+        pendingDraft.base = snapshot.updatedAt
+        flushDraft()
+      }
       deleteDraft(BLANK_TOOL_ID)
     }
     adoptWriteResult(node, snapshot)
-    setToast('已下载副本「' + d.fileName + '」,请从下载位置打开该文件继续编辑')
-  } else {
+    rebaselinePendingDraft(node, snapshot, seq)
+    if (state.node === node) {
+      setToast('已发起下载副本「' + d.fileName + '」;若浏览器拦截了下载,请重新保存')
+    }
+  } else if (state.node === node) {
     setToast('副本生成失败:' + d.reason + ';请使用「导出 JSON」')
+  }
+}
+
+/**
+ * 保存成功后,同一旅行中晚于快照的新编辑(pendingDraft)重基准:
+ * 草稿 base 从旧磁盘版本对齐到本次成功写入的快照版本——
+ * 保存失败/冲突时不调用(基准不推进);无 pendingDraft 或属其他旅行则不动。
+ */
+function rebaselinePendingDraft(node: TripNode, snapshot: TripNode, seq: number): void {
+  if (!isCurrentSave(seq)) return
+  if (!pendingDraft || pendingDraft.node.project.id !== node.project.id) return
+  if (pendingDraft.node.updatedAt > snapshot.updatedAt) {
+    pendingDraft.base = snapshot.updatedAt
   }
 }
 
