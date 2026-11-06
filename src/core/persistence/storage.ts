@@ -1,4 +1,5 @@
-import { nodeContentSignature, nowIso, type DraftEntry, type TripNode } from '../schema'
+import { nodeContentSignature, nowIso, serializeNode, type DraftEntry, type TripNode } from '../schema'
+import { admitNode } from '../admission'
 
 /**
  * 草稿层:localStorage,键 = `tripscope:draft:<project.id>`。
@@ -63,8 +64,12 @@ export function deleteDraft(id: string): void {
 
 /**
  * 打开旅行文件时的草稿裁决:
- * - 草稿内容签名(项目名+数据,时间戳不参与)与文件一致 → 冗余,静默清除
+ * - 对草稿也跑准入(迁移),两侧都在当前版本上再比内容签名 —— 否则旧版本草稿
+ *   对迁移后文件必弹假横幅,丢弃即真删内容
+ * - 签名一致(项目名+数据,时间戳不参与)→ 冗余,静默清除
  * - 不一致(包括仅改名)→ 交由用户决策(恢复/丢弃),绝不静默覆盖
+ * - 草稿过不了准入(损坏/外来格式)→ 视同不存在:不弹横幅、不删,草稿箱仍可见
+ * 调用契约:fileNode 已经过 admitNode(处于当前支持版本)。
  */
 export function resolveDraftOnOpen(
   id: string,
@@ -72,7 +77,9 @@ export function resolveDraftOnOpen(
 ): { entry: DraftEntry | null } {
   const d = loadDraft(id)
   if (!d) return { entry: null }
-  if (nodeContentSignature(d.node) === nodeContentSignature(fileNode)) {
+  const adm = admitNode(serializeNode(d.node))
+  if (!adm.ok) return { entry: null }
+  if (nodeContentSignature(adm.node) === nodeContentSignature(fileNode)) {
     deleteDraft(id)
     return { entry: null }
   }

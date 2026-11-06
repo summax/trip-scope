@@ -8,8 +8,8 @@
  * 提前闭合脚本标签破坏宿主 HTML;读取走 JSON.parse,自动还原。
  */
 
-/** 当前应用支持的数据 schema 版本 */
-export const SUPPORTED_SCHEMA_VERSION = 1
+/** 当前应用支持的数据 schema 版本(v2 起:领域模型 + rev,见 migrate.ts 迁移链) */
+export const SUPPORTED_SCHEMA_VERSION = 2
 
 /** 空白工具(尚未保存为旅行文件)的占位 id */
 export const BLANK_TOOL_ID = '__blank__'
@@ -28,13 +28,18 @@ export interface DemoItem {
   qty: number
 }
 
+/** v1 演示数据形态 */
+export interface DemoData {
+  note?: string
+  countA?: number
+  countB?: number
+  items?: DemoItem[]
+}
+
+/** v2 数据形态:领域模型等业务需求定稿后在 v2 内落地(docs/requirements-2026-11-06.md) */
 export interface TripData {
-  demo?: {
-    note?: string
-    countA?: number
-    countB?: number
-    items?: DemoItem[]
-  }
+  legacy?: unknown
+  demo?: DemoData
 }
 
 export interface TripNode {
@@ -44,6 +49,8 @@ export interface TripNode {
   updatedAt: string
   /** 最后一次写出这份数据的应用版本;不描述文件内嵌应用代码的版本 */
   appVersion: string
+  /** 写出版本号:v2 起随每次文件写盘自增;预留,读侧 rev ?? 0 兜底 */
+  rev?: number
   data: TripData
 }
 
@@ -130,11 +137,15 @@ export function parseNodeJson(jsonText: string): NodeParseResult {
 /* 数据节点定位与替换:严格边界,命中数必须为 1                          */
 /* ------------------------------------------------------------------ */
 
-// 属性顺序/大小写宽容版:数据节点身份 = id 为 app-data 且 type 含 application/json。
+// 属性顺序/大小写宽容版:数据节点身份 = 独立 id 属性(值 app-data)且开标签含 application/json。
+// 属性名边界用 \s(要求 id 前是空白):\b 挡不住 data-id/aria-id——连字符是非词字符,
+// \b 会在 data- 与 id 之间成立,让伪属性冒充真属性。
 // 它是严格形态的超集,统一统计即全集——「严格命中 1 就返回」会漏掉
 // 「1 严格 + 1 宽容」并存的多节点文件,造成替换后残留第二个数据节点。
-// 模式自身不会自匹配 dist 内嵌源码:\bid 的词边界断言在 bid 连写文本上恒失败。
-const NODE_RE_LOOSE = /(<script\b[^>]*\bid=["']app-data["'][^>]*>)([\s\S]*?)<\/script>/gi
+// 已知边界(有意决策,非疏漏):HTML 注释内、脚本字符串里的伪标签文本也按候选计入——
+// 并存时保守拒绝(multiple),数据安全优先于便利;换 HTML 解析器是后续可选升级。
+// 模式自身不会自匹配 dist 内嵌源码:源码文本中 id= 前无真实空白字符。
+const NODE_RE_LOOSE = /(<script\b[^>]*\sid=["']app-data["'][^>]*>)([\s\S]*?)<\/script>/gi
 
 export type ExtractResult =
   | { ok: true; json: string; openTag: string; start: number; end: number }
@@ -216,6 +227,20 @@ export function blankNode(): TripNode {
     appVersion: __APP_VERSION__,
     data: {},
   }
+}
+
+/** rev 规范化:非负安全整数原样保留,缺失/非法归 0 */
+export function normalizeRev(v: unknown): number {
+  return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : 0
+}
+
+/**
+ * 文件写盘收口:appVersion 一律当前应用版本,rev 自增。
+ * 仅文件写盘路径调用(save/saveAsCopy);导出 JSON 是快照,不 bump rev。
+ */
+export function stampNodeForWrite(node: TripNode): void {
+  node.appVersion = __APP_VERSION__
+  node.rev = normalizeRev(node.rev) + 1
 }
 
 /** 键序无关的规范化 JSON(草稿/文件内容比对、防键序漂移) */

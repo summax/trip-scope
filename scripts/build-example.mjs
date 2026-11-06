@@ -10,6 +10,12 @@ const RE = /(<script id="app-data" type="application[/]json">)([\s\S]*?)<\/scrip
 
 const html = readFileSync(new URL('../dist/trip-scope.html', import.meta.url), 'utf8')
 
+// schemaVersion 单一真相:从 schema.ts 源码解析,硬编码会在下次版本 bump 时暗炸 e2e
+const schemaSrc = readFileSync(new URL('../src/core/schema.ts', import.meta.url), 'utf8')
+const svMatch = schemaSrc.match(/SUPPORTED_SCHEMA_VERSION = (\d+)/)
+if (!svMatch) throw new Error('无法从 schema.ts 解析 SUPPORTED_SCHEMA_VERSION')
+const CURRENT_SCHEMA_VERSION = Number(svMatch[1])
+
 const matches = [...html.matchAll(RE)]
 if (matches.length !== 1) {
   throw new Error(`数据节点命中数必须为 1,实际 ${matches.length},产物结构异常`)
@@ -17,7 +23,7 @@ if (matches.length !== 1) {
 
 const node = {
   format: 'tripscope',
-  schemaVersion: 1,
+  schemaVersion: CURRENT_SCHEMA_VERSION,
   project: {
     id: '8f7c2b1a-3d4e-4f5a-9b8c-1a2b3c4d5e6f',
     name: '示例:2027 国庆云南(骨架演示)',

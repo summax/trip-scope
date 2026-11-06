@@ -132,6 +132,38 @@ describe('findDataNode / replaceDataNode:严格边界', () => {
     expect(!r.ok && r.reason === 'multiple').toBe(true)
   })
 
+  test('data-id/aria-id 伪属性不冒充数据节点(属性名边界 \\s)', () => {
+    const fakeOnly =
+      `<!DOCTYPE html><html><body>` +
+      `<script data-id="app-data" data-type="application/json">{}</script>` +
+      `<script aria-id="app-data">{}</script></body></html>`
+    const r = findDataNode(fakeOnly)
+    expect(!r.ok && r.reason === 'missing').toBe(true)
+  })
+
+  test('真实节点与 data-id 伪节点并存 → 仍命中真实节点(不误判 multiple)', () => {
+    const html =
+      page(good) + `<script data-id="app-data" data-type="application/json">{}</script>`
+    const r = findDataNode(html)
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.openTag).toBe('<script id="app-data" type="application/json">')
+  })
+
+  test('HTML 注释内伪节点与真实节点并存 → multiple(决策:注释文本按候选计入,保守拒绝)', () => {
+    const html =
+      page(good) + `<!-- <script id="app-data" type="application/json">{}</script> -->`
+    const r = findDataNode(html)
+    expect(!r.ok && r.reason === 'multiple').toBe(true)
+  })
+
+  test('脚本字符串内伪节点与真实节点并存 → multiple(同上决策)', () => {
+    const html =
+      page(good) +
+      `<script>const s = '<script id="app-data" type="application/json">{}</script>'</script>`
+    const r = findDataNode(html)
+    expect(!r.ok && r.reason === 'multiple').toBe(true)
+  })
+
   test('缺失拒绝且原因为 missing', () => {
     const r = findDataNode('<html><body>没有节点</body></html>')
     expect(!r.ok && r.reason === 'missing').toBe(true)

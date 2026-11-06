@@ -8,6 +8,7 @@ import {
   newId,
   nowIso,
   serializeNode,
+  stampNodeForWrite,
   type DemoItem,
   type DraftEntry,
   type TripData,
@@ -397,8 +398,6 @@ function unknownHandleName(handle: unknown): string | null {
 export async function save(): Promise<void> {
   if (!canEdit() || !state.node) return
   const node = state.node
-  // 落盘痕迹必须准:写出文件的 appVersion 一律是当前应用版本
-  node.appVersion = __APP_VERSION__
 
   if (state.openMode === 'handle') {
     // 迁移写回 = 原地升级磁盘原文件;本次会话首次写回必须经确认(取消后下次保存再次询问)
@@ -406,6 +405,8 @@ export async function save(): Promise<void> {
       state.upgradeConfirmOpen = true
       return
     }
+    // 落盘痕迹必须准:appVersion/rev 只在真写盘时 stamp,弹确认层不产生写盘痕迹
+    stampNodeForWrite(node)
     // 升级写回:迁移后的旧文件以当前应用完整快照为底整体替换,不允许「新数据+旧代码」组合落盘
     const r = await saveToHandle(node, { fullAppUpgrade: state.upgradeFromVersion !== null })
     if (r.outcome === 'saved') {
@@ -451,7 +452,7 @@ export async function save(): Promise<void> {
 export async function saveAsCopy(): Promise<void> {
   if (!canEdit() || !state.node) return
   const clone = deepClone(state.node)
-  clone.appVersion = __APP_VERSION__
+  stampNodeForWrite(clone)
   clone.project = { id: newId(), name: state.node.project.name + ' 副本' }
   // 迁移升级场景的副本必须是完整新版本(应用代码 + 数据),不许旧代码进副本
   const preferSnapshot = state.upgradeFromVersion !== null
