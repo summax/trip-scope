@@ -10,8 +10,7 @@ export async function run(page) {
   await sleep(600)
   await page.getByRole('button', { name: '新建旅行' }).first().click()
   await sleep(300)
-  await page.getByPlaceholder(/2027 国庆云南旅行/).fill('RN1旧旅行')
-  await page.getByPlaceholder(/可输入任意字符/).fill('旧内容')
+  await page.getByPlaceholder(/如:2027 国庆云南旅行/).fill('RN1旧旅行')
   await sleep(600)
   await page.getByRole('button', { name: '新建旅行' }).click()
   await sleep(300)
@@ -102,7 +101,7 @@ export async function run(page) {
   await sleep(300) // 面板行已渲染
   // 编辑与删除在同一 evaluate 内完成:间隔为页内 JS 执行耗时,必然 < debounce 窗口
   await page.evaluate(() => {
-    const input = document.querySelector('input[placeholder*="可输入任意字符"]')
+    const input = document.querySelector('input[placeholder*="如:2027 国庆云南旅行"]')
     input.value = '制造pending的编辑'
     input.dispatchEvent(new Event('input', { bubbles: true }))
     const rows = [...document.querySelectorAll('div.rounded-lg.border')]

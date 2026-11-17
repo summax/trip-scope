@@ -15,6 +15,7 @@ import {
   type TripData,
   type TripNode,
 } from './schema'
+import { defaultTrip, normalizeTrip, type TripBlob } from './domain/types'
 import { admitNode } from './admission'
 import {
   deleteDraft,
@@ -291,6 +292,79 @@ export function updateData(mutate: (data: TripData) => void): void {
   if (!canEdit()) return
   mutate(state.node!.data)
   state.node!.updatedAt = nowIso()
+  scheduleDraft()
+}
+
+/* ------------------------------------------------------------------ */
+/* 业务操作提交 + 会话撤销/重做                                          */
+/* ------------------------------------------------------------------ */
+
+interface UndoFrame {
+  data: unknown
+  tag: string | null
+  at: number
+}
+
+const undoStack: UndoFrame[] = []
+const redoStack: UndoFrame[] = []
+
+/** 惰性初始化业务数据:缺失/部分缺失时规范化兜底 */
+export function ensureTripData(): TripBlob {
+  const d = state.node!.data as TripData
+  if (!d.trip) {
+    d.trip = defaultTrip()
+  } else {
+    d.trip = normalizeTrip(d.trip)
+  }
+  return d.trip as TripBlob
+}
+
+/**
+ * 业务操作唯一提交口:每操作一个撤销单元。
+ * 相同 tag 在 1.2s 合并窗口内的连续提交共享同一撤销单元(输入流畅)。
+ */
+export function commit(mutate: (t: TripBlob) => void, tag?: string): void {
+  if (!canEdit() || !state.node) return
+  const snap = deepClone(state.node.data)
+  const top = undoStack[undoStack.length - 1]
+  const coalesce =
+    tag !== undefined && top !== undefined && top.tag === tag && Date.now() - top.at < 1200
+  if (coalesce) {
+    top.at = Date.now()
+  } else {
+    undoStack.push({ data: snap, tag: tag ?? null, at: Date.now() })
+    if (undoStack.length > 60) undoStack.shift()
+  }
+  redoStack.length = 0
+  updateData(() => {
+    const t = ensureTripData()
+    mutate(t)
+  })
+}
+
+export function canUndo(): boolean {
+  return undoStack.length > 0 && canEdit()
+}
+
+export function canRedo(): boolean {
+  return redoStack.length > 0 && canEdit()
+}
+
+export function undo(): void {
+  if (!canUndo() || !state.node) return
+  const frame = undoStack.pop()!
+  redoStack.push({ data: deepClone(state.node.data), tag: null, at: 0 })
+  state.node.data = frame.data as TripData
+  state.node.updatedAt = nowIso()
+  scheduleDraft()
+}
+
+export function redo(): void {
+  if (!canRedo() || !state.node) return
+  const frame = redoStack.pop()!
+  undoStack.push({ data: deepClone(state.node.data), tag: null, at: 0 })
+  state.node.data = frame.data as TripData
+  state.node.updatedAt = nowIso()
   scheduleDraft()
 }
 
@@ -821,7 +895,7 @@ export function deleteFromPanel(id: string): void {
 /* 内部工具                                                             */
 /* ------------------------------------------------------------------ */
 
-function setToast(msg: string): void {
+export function setToast(msg: string): void {
   state.toast = msg
   if (toastTimer) clearTimeout(toastTimer)
   toastTimer = setTimeout(() => {

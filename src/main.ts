@@ -2,7 +2,7 @@ import { createApp } from 'vue'
 import App from './App.vue'
 import './styles/main.css'
 import { run } from './core/bootstrap'
-import { flushDraft, surfaceError, save, state } from './core/store'
+import { flushDraft, surfaceError, save, state, undo, redo, canUndo, canRedo } from './core/store'
 
 run()
 const app = createApp(App)
@@ -29,6 +29,22 @@ window.addEventListener('keydown', (e) => {
     if (state.screen !== 'trip' || state.readonly || state.node === null) return
     e.preventDefault()
     void save()
+  }
+  // Ctrl/Cmd+Z 撤销、Ctrl/Cmd+Y(或 +Shift+Z)重做;输入框内放行浏览器原生撤销
+  const inText =
+    e.target instanceof HTMLInputElement ||
+    e.target instanceof HTMLTextAreaElement ||
+    e.target instanceof HTMLSelectElement
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'z' && !inText) {
+    if (state.screen !== 'trip' || state.readonly || state.node === null) return
+    e.preventDefault()
+    if (e.shiftKey && canRedo()) redo()
+    else if (!e.shiftKey && canUndo()) undo()
+  }
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'y' && !inText) {
+    if (state.screen !== 'trip' || state.readonly || state.node === null) return
+    e.preventDefault()
+    if (canRedo()) redo()
   }
 })
 // 关闭/刷新前冲刷排期中的草稿,避免最后 300ms 的编辑丢失

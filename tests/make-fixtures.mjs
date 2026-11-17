@@ -42,8 +42,21 @@ const foreignNode = {
   appVersion: 'other',
   data: {},
 }
-const foreignJson = JSON.stringify(foreignNode, null, 2).replace(/</g, '\\u003c')
-writeFileSync(path.join(OUT, 'foreign.html'), replaceNode(html, foreignJson), 'utf8')
+  const foreignJson = JSON.stringify(foreignNode, null, 2).replace(/</g, '\\u003c')
+  writeFileSync(path.join(OUT, 'foreign.html'), replaceNode(html, foreignJson), 'utf8')
 
-  console.log('[fixtures] corrupted.html / future.html / foreign.html 已生成于 tests/fixtures/')
+  // 4) v2 旧版文件:句柄保存触发升级确认(取消/另存副本/确认三分支)
+  const v2Node = {
+    format: 'tripscope',
+    schemaVersion: 2,
+    project: { id: 'cccc1111-0000-4000-8000-000000009999', name: 'V2旧版旅行' },
+    updatedAt: new Date().toISOString(),
+    appVersion: '0.0.9',
+    rev: 1,
+    data: { legacy: { demo: { note: 'v2 旧数据' } } },
+  }
+  const v2Json = JSON.stringify(v2Node, null, 2).replace(/</g, '\\u003c')
+  writeFileSync(path.join(OUT, 'v2-trip.html'), replaceNode(html, v2Json), 'utf8')
+
+  console.log('[fixtures] corrupted.html / future.html / foreign.html / v2-trip.html 已生成于 tests/fixtures/')
 }

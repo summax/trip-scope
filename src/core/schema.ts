@@ -8,8 +8,10 @@
  * 提前闭合脚本标签破坏宿主 HTML;读取走 JSON.parse,自动还原。
  */
 
-/** 当前应用支持的数据 schema 版本(v2 起:领域模型 + rev,见 migrate.ts 迁移链) */
-export const SUPPORTED_SCHEMA_VERSION = 2
+import type { TripBlob } from './domain/types'
+
+/** 当前应用支持的数据 schema 版本(v3 起:业务数据落 data.trip,见 migrate.ts 迁移链) */
+export const SUPPORTED_SCHEMA_VERSION = 3
 
 /** 空白工具(尚未保存为旅行文件)的占位 id */
 export const BLANK_TOOL_ID = '__blank__'
@@ -36,8 +38,9 @@ export interface DemoData {
   items?: DemoItem[]
 }
 
-/** v2 数据形态:领域模型等业务需求定稿后在 v2 内落地(docs/requirements-2026-11-06.md) */
+/** v3 数据形态:业务数据落 data.trip(裁剪基线见 docs/scope-cut-2026-11-17.md) */
 export interface TripData {
+  trip?: TripBlob
   legacy?: unknown
   demo?: DemoData
 }

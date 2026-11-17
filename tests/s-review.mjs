@@ -36,11 +36,11 @@ export async function run(page) {
   await sleep(600)
   await page.getByRole('button', { name: '新建旅行' }).first().click()
   await sleep(300)
-  await page.getByPlaceholder(/可输入任意字符/).fill('H3未保存内容')
+  await page.getByPlaceholder(/如:2027 国庆云南旅行/).fill('H3未保存内容')
   await page.waitForTimeout(150)
   await page.reload()
   await sleep(700)
-  const rh3Note = await page.getByPlaceholder(/可输入任意字符/).inputValue()
+  const rh3Note = await page.getByPlaceholder(/如:2027 国庆云南旅行/).inputValue()
   report('RH3 新建旅行后刷新,未保存草稿可恢复', rh3Note === 'H3未保存内容', `note=${rh3Note}`)
 
   /* RH4 仅改名也应触发草稿恢复(整节点比对) */
@@ -49,7 +49,7 @@ export async function run(page) {
   await page.getByRole('button', { name: '新建旅行' }).first().click()
   await sleep(300)
   await page.getByPlaceholder(/2027 国庆云南旅行/).fill('N1')
-  await page.getByPlaceholder(/可输入任意字符/).fill('D1')
+  await page.getByPlaceholder(/如:2027 国庆云南旅行/).fill('D1')
   await sleep(600)
   const [dl] = await Promise.all([
     page.waitForEvent('download'),
@@ -101,7 +101,7 @@ export async function run(page) {
   await row.click()
   await sleep(700)
   const rh5Banner = await page.getByText('只读模式').count()
-  const rh5Disabled = await page.getByPlaceholder(/可输入任意字符/).isDisabled()
+  const rh5Disabled = await page.getByPlaceholder(/如:2027 国庆云南旅行/).isDisabled()
   report('RH5 v99 草稿恢复进入只读模式', rh5Banner >= 1 && rh5Disabled, `banner=${rh5Banner} disabled=${rh5Disabled}`)
 
   /* RM1 项目名尾随空格不被吞 */
@@ -122,7 +122,7 @@ export async function run(page) {
   await sleep(600)
   await page.getByRole('button', { name: '新建旅行' }).first().click()
   await sleep(300)
-  await page.getByPlaceholder(/可输入任意字符/).fill('M2排期快照内容')
+  await page.getByPlaceholder(/如:2027 国庆云南旅行/).fill('M2排期快照内容')
   await page.getByRole('button', { name: '新建旅行' }).click()
   await page.waitForTimeout(500)
   const found = await page.evaluate(() => {

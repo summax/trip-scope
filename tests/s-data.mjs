@@ -5,8 +5,7 @@ import path from 'node:path'
 export async function run(page) {
   await page.getByRole('button', { name: '新建旅行' }).first().click()
   await sleep(300)
-  await page.getByPlaceholder(/2027 国庆云南旅行/).fill('验证旅行一')
-  await page.getByPlaceholder(/可输入任意字符/).fill('往返内容N1')
+  await page.getByPlaceholder(/如:2027 国庆云南旅行/).fill('往返内容N1')
   await sleep(500)
   const [dl] = await Promise.all([
     page.waitForEvent('download'),
@@ -20,14 +19,13 @@ export async function run(page) {
   await sleep(300)
   await page.locator('input[type="file"]').setInputFiles(jsonPath)
   await sleep(700)
-  const nameVal = await page.getByPlaceholder(/2027 国庆云南旅行/).inputValue()
-  const noteVal = await page.getByPlaceholder(/可输入任意字符/).inputValue()
-  report('S3b 导入 JSON 后内容一致', nameVal === '验证旅行一' && noteVal === '往返内容N1', `name=${nameVal} note=${noteVal}`)
+  const nameVal = await page.getByPlaceholder(/如:2027 国庆云南旅行/).inputValue()
+  report('S3b 导入 JSON 后内容一致', nameVal === '往返内容N1', `name=${nameVal}`)
 
   // S4 冲突横幅:导入基线 → 编辑 → 再导入同一文件 → 横幅 → 恢复 → 再导入 → 丢弃
   await page.locator('input[type="file"]').setInputFiles(jsonPath)
   await sleep(700)
-  const note = page.getByPlaceholder(/可输入任意字符/)
+  const note = page.getByPlaceholder(/如:2027 国庆云南旅行/)
   await note.fill('冲突验证编辑')
   await sleep(500)
   await page.locator('input[type="file"]').setInputFiles(jsonPath)

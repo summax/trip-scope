@@ -9,12 +9,12 @@ import {
   type TripNode,
 } from '../../src/core/schema'
 
-describe('v2 信封', () => {
-  test('SUPPORTED_SCHEMA_VERSION = 2', () => {
-    expect(SUPPORTED_SCHEMA_VERSION).toBe(2)
+describe('v3 信封', () => {
+  test('SUPPORTED_SCHEMA_VERSION = 3(升版须有意识:补迁移函数+UpgradeModal 三分支断言)', () => {
+    expect(SUPPORTED_SCHEMA_VERSION).toBe(3)
   })
 
-  test('blankNode 为 v2 形态(rev 缺省,trip 字段不在契约内)', () => {
+  test('blankNode 为 v3 形态(rev 缺省,trip 字段缺省为空)', () => {
     const n = blankNode()
     expect(n.schemaVersion).toBe(SUPPORTED_SCHEMA_VERSION)
     expect(n.rev).toBeUndefined()

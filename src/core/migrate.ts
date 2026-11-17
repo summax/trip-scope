@@ -56,11 +56,26 @@ export function migrateV1toV2(node: TripNode): TripNode {
   return next as unknown as TripNode
 }
 
+/**
+ * v2 → v3:业务数据收口。v2 的 data 本就为空对象(demo 已归档 legacy),
+ * v3 业务数据落 data.trip,由应用惰性初始化,迁移本身零数据变换、保真直通。
+ */
+export function migrateV2toV3(node: TripNode): TripNode {
+  const raw = node as unknown as Record<string, unknown>
+  const next: Record<string, unknown> = { ...raw }
+  return next as unknown as TripNode
+}
+
 const MIGRATIONS: MigrationStep[] = [
   {
     from: 1,
     describe: 'v1→v2:rev 回填、演示数据归档 legacy',
     run: migrateV1toV2,
+  },
+  {
+    from: 2,
+    describe: 'v2→v3:业务数据收口 data.trip(直通保真,应用惰性初始化)',
+    run: migrateV2toV3,
   },
 ]
 
